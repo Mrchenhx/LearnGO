@@ -538,3 +538,370 @@ GO中只有后缀增或减 `i++`。带有 `++` 和 `--` 的只能作为语句，
 在 `type TZ int` 中，TZ 就是 int 类型的新名称（用于表示程序中的时区），然后就可以使用 TZ 来操作 int 类型的数据。
 
 类型别名得到的新类型**并非和原类型完全相同**，新类型**不会拥有原类型所附带的方法**（第 10 章）；TZ 可以自定义一个方法用来输出更加人性化的时区信息。
+
+### 1.6 字符串 string
+
+#### 1.6.1 定义
+
+**字符串是一种值类型**，且值不可变，即创建某个文本后你无法再次修改这个文本的内容；更深入地讲，字符串是字节的定长数组。
+
+Go 支持以下 2 种形式的字面值：
+
+- 解释字符串：
+
+  该类字符串使用双引号括起来，其中的相关的转义字符将被替换，这些转义字符包括：
+
+  - \n ：换行符 
+  - \r ：回车符 
+  - \t ：tab 键 
+  - \u 或 \U ：Unicode 字符 
+  - \\\ ：反斜杠自身
+
+- 非解释字符串：
+
+  该类字符串使用**反引号**括起来，支持换行，例如：
+
+  ``This is a raw string \n` 中的 `\n\` 会被原样输出。
+
+和 C/C++不一样，Go 中的字符串是根据长度限定，而非特殊字符 \0 。
+
+`string` 类型的零值为长度为零的字符串，即空字符串 "" 。
+
+一般的比较运算符（ == 、 != 、 < 、 <= 、 >= 、 > ）通过在内存中按字节比较来实现字符串的对比。你可以通过函数 len() 来获取字符串所占的字节长度，例如： len(str) 。
+
+**注意点：对于字符串，不可获取某个字节的地址！！ 如 &str[i]**
+
+> 因为对于上述操作，需要**操作对象是可寻址对象（addressable）**
+
+#### 1.6.2 可寻址对象
+
+官方对可寻址对象的定义：
+
+> For an operand x of type T, the address operation &x generates a pointer of type *T to x. The operand must be addressable, that is, either a variable, pointer indirection, or slice indexing operation; or a field selector of an addressable struct operand; or an array indexing operation of an addressable array. As an exception to the addressability requirement, x may also be a (possibly parenthesized) composite literal. If the evaluation of x would cause a run-time panic, then the evaluation of &x does too.
+>
+> 对于类型为 `T` 的操作数 `x`，地址操作符 `&x` 将生成一个类型为 `*T` 的指针指向 `x`。操作数必须可寻址，即，变量、间接指针、切片索引操作，或可寻址结构体的字段选择器，或可寻址数组的数组索引操作。作为可寻址性要求的例外，`x` 也可为（圆括号括起来的）复合字面量。如果对 `x` 的求值会引起运行时恐慌，那么对 `&x` 的求值也会引起恐慌。
+>
+> For an operand x of pointer type *T, the pointer indirection *x denotes the variable of type T pointed to by x. If x is nil, an attempt to evaluate *x will cause a run-time panic.
+>
+> 对于指针类型为 `*T` 的操作数 `x`，间接指针 `*x` 表示类型为 `T` 的值指向 `x`。若 `x` 为 `nil`，尝试求值 `*x` 将会引发运行时恐慌。
+
+##### 以下几种是可寻址的：
+
+- 一个变量: `&x`
+- 指针引用(pointer indirection): `&*x`
+- slice 索引操作(不管 slice 是否可寻址): `&s[1]`
+- 可寻址 struct 的字段: `&point.X`
+- 可寻址数组的索引操作: `&a[0]`
+- composite literal 类型: `&struct{ X int }{1}`
+
+下列情况 `x` 是不可以寻址的，不能使用 `&x` 取得指针：
+
+- 字符串中的字节
+- map 对象中的元素
+- 接口对象的动态值(通过 type assertions 获得)
+- 常数
+- literal 值(非 composite literal)
+- package 级别的函数
+- 方法 method(用作函数值)
+- 中间值(intermediate value):
+  - 函数调用
+  - 显式类型转换
+  - 各种类型的操作（除了指针引用 pointer dereference 操作`*x`):
+    - channel receive operations
+    - sub-string operations
+    - sub-slice operations
+    - 加减乘除等运算符
+
+##### **有几个点需要解释下**：
+
+- 常数为什么不可以寻址?
+
+> 如果可以寻址的话，我们可以通过指针修改常数的值，破坏了常数的定义。
+
+- map 的元素为什么不可以寻址？
+
+> 两个原因，如果对象不存在，则返回零值，零值是不可变对象，所以不能寻址，如果对象存在，因为 Go 中 map 实现中元素的地址是变化的，这意味着寻址的结果是无意义的。
+
+- 为什么 slice 不管是否可寻址，它的元素读是可以寻址的？
+
+> 因为 slice 底层实现了一个数组，它是可以寻址的。
+
+- 为什么字符串中的字符/字节又不能寻址呢？
+
+> 因为字符串是不可变的。
+
+规范中还有几处提到了 addressable:
+
+- 调用一个接收者为指针类型的方法时，使用一个可寻址的值将自动获取这个值的指针
+- `++`、`--` 语句的操作对象必须可寻址或者是 map 的索引操作
+- 赋值语句 `=` 的左边对象必须可寻址，或者是 map 的索引操作，或者是 `_`
+- 上条同样使用 `for ... range` 语句
+
+[以上结论来自参考资料](https://shockerli.net/post/golang-faq-cannot-take-the-address/)
+
+对于字符串的连接，可以使用 `+` 、`strings.join()`  、字节缓冲 `bytes.Buffer`。
+
+> 创建一个用于统计字节和字符（rune）的程序，并对字符串 asSASA ddd dsjkdsjs dk 进行分析，然后再分析 asSASA ddd dsjkdsjsこん dk ，最后解释两者不同的原因（提示：使用 unicode/utf8 包）。
+
+```go
+package main
+import (
+	"fmt"
+	"unicode/utf8"
+)
+func main() {
+	count()
+}
+func count() {
+	str1 := "asSASA ddd dsjkdsjs dk"
+	fmt.Printf("The number of bytes in string str1 is %d\n", len(str1))
+	fmt.Printf("The number of characters in string str1 is %d\n", utf8.RuneCountInString(str1))
+	str2 := "asSASA ddd dsjkdsjsこん dk"
+	fmt.Printf("The number of bytes in string str2 is %d\n", len(str2))
+	fmt.Printf("The number of characters in string str2 is %d", utf8.RuneCountInString(str2))
+}
+```
+
+输出结果：
+
+> The number of bytes in string str1 is 22
+> The number of characters in string str1 is 22
+> The number of bytes in string str2 is 6
+> The number of characters in string str2 is 2
+
+结论：
+
+> len()`函数统计字符串中所占的字节数。
+>
+> `utf8.RuneCountInString()`函数统计的数字符个数
+>
+> 当字符为 ASCII 码时则占用 1 个字节，其它字符根据需要占用 2-4 个字节。（其中中文等特殊字符一般占3个字节）
+
+### 1.7 strings 和 strconv 包
+
+1.7.1 概述
+
+作为一种基本数据结构，每种语言都有一些对于字符串的预定义处理函数。Go 中使用 strings 包来完成对字符串 的主要操作。
+
+#### 1.7.1 前缀和后缀
+
+HasPrefix 判断字符串 s 是否以 prefix 开头：
+
+```go
+strings.HasPrefix(s, prefix string) bool
+```
+
+HasSuffix 判断字符串 s 是否以 suffix 结尾：
+
+```go
+strings.HasSuffix(s, suffix string) bool
+```
+
+#### 1.7.2 字符串包含关系
+
+`Contains` 判断字符串 s 是否包含 substr 
+
+```go
+strings.Contains(s, substr string) bool
+```
+
+#### 1.7.3 判断子字符串或字符在父字符串中出现的位置（索引）
+
+`Index` 返回字符串 `str` 在字符串 `s` 中的索引（ `str` 的第一个字符的索引），-1 表示字符串 s 不包含字符串 `str` ：
+
+```go
+strings.Index(s, str string) int
+```
+
+LastIndex 返回字符串 str 在字符串 s 中**最后出现位置的索引**（ str 的第一个字符的索引），-1 表示字符串 s 不包含字符串 str ：
+
+```go
+strings.LastIndex(s, str string) int
+```
+
+如果 `ch` 是非 ASCII 编码的字符，建议使用以下函数来对字符进行定位：
+
+```go
+strings.IndexRune(s string, r rune) int
+```
+
+#### 1.7.4 字符串替换
+
+Replace 用于将字符串 str 中的前 n 个字符串 old 替换为字符串 new ，并返回一个新的字符串，如果 n = -1 则替换所有字符串 old 为字符串 new ：
+
+```go
+ strings.Replace(str, old, new, n) string
+```
+
+#### 1.7.5 统计字符串出现次数
+
+`Count` 用于计算字符串 `str` 在字符串 s 中出现的**非重叠**次数：
+
+```go
+strings.Count(s, str string) int
+```
+
+#### 1.7.6 重复字符串
+
+`Repeat` 用于重复 `count` 次字符串 s 并返回一个新的字符串：
+
+```go
+strings.Repeat(s, count int) string
+```
+
+#### 1.7.7 修改字符串大小写
+
+`ToLower` 将字符串中的 `Unicode 字符`全部转换为相应的小写字符： 
+
+```go
+ strings.ToLower(s) string 
+```
+
+`ToUpper` 将字符串中的 `Unicode 字符`全部转换为相应的大写字符： 
+
+```go
+strings.ToUpper(s) string
+```
+
+#### 1.7.8 修剪字符串
+
+你可以使用 `strings.TrimSpace(s)` 来剔除字符串开头和结尾的空白符号；如果你想要剔除指定字符，则可以使用 `strings.Trim(s, "cut")` 来将开头和结尾的 `cut` 去除掉。该函数的第二个参数可以包含任何字符，如果你只想 剔除开头或者结尾的字符串，则可以使用 `TrimLeft` 或者 `TrimRight` 来实现。
+
+#### 1.7.9 分割字符串
+
+`strings.Fields(s)` 将会利用 1 个或多个空白符号来作为动态长度的分隔符将字符串分割成若干小块，并返回一个 slice，如果字符串只包含空白符号，则返回一个长度为 0 的 slice。
+
+ `strings.Split(s, sep)` 用于自定义分割符号来对指定字符串进行分割，同样返回 slice。
+
+因为这 2 个函数都会返回 slice，所以习惯使用 for-range 循环来对其进行处理
+
+#### 1.7.10 拼接 slice 到字符串
+
+`Join` 用于将元素类型为 string 的 slice 使用分割符号来拼接组成一个字符串：
+
+```go
+strings.Join(sl []string, sep string) string
+```
+
+#### 1.7.11 从字符串中读取内容
+
+函数 `strings.NewReader(str)` 用于生成一个 Reader 并读取字符串中的内容，然后返回指向该 Reader 的指针，从其它类型读取内容的函数还有：
+
+- Read() 从 []byte 中读取内容。
+- ReadByte() 和 ReadRune() 从字符串中读取下一个 byte 或者 rune。
+
+#### 1.7.12 字符串与其它类型的转换
+
+与字符串相关的类型转换都是通过 `strconv` 包实现的。
+
+该包包含了一些变量用于获取程序运行的操作系统平台下 int 类型所占的位数，如： `strconv.IntSize` 。
+
+**任何类型 T 转换为字符串总是成功的。**
+
+针对从数字类型转换到字符串，Go 提供了以下函数：
+
+- `strconv.Itoa(i int) string` 返回**数字 i 所表示的字符串**类型的十进制数。 
+- `strconv.FormatFloat(f float64, fmt byte, prec int, bitSize int) string`  将 **64 位浮点型的数字转换为字符串**，其中 `fmt` 表示格式（其值可以是 'b' 、 'e' 、 'f' 或 'g' ）， `prec` 表示精度， `bitSize` 则使用 32 表示 `float32`，用 64 表示 `float64`。
+
+将字符串转换为其它类型 tp 并不总是可能的，可能会在运行时抛出错误 parsing "…": invalid argument 。
+
+针对从字符串类型转换为数字类型，Go 提供了以下函数：
+
+- `strconv.Atoi(s string) (i int, err error)` 将字符串转换为 int 型。
+- `strconv.ParseFloat(s string, bitSize int) (f float64, err error)` 将字符串转换为 float64 型。
+
+利用多返回值的特性，这些函数会返回 2 个值，第 1 个是转换后的结果（如果转换成功），第 2 个是可能出现的错误，因此，我们一般使用以下形式来进行从字符串到其它类型的转换：
+
+```go
+val, err = strconv.Atoi(s)
+```
+
+### 1.8 时间和日期
+
+`time` 包为我们提供了一个数据类型 `time.Time` （作为值使用）以及显示和测量时间和日期的功能函数。 
+
+当前时间可以使用 `time.Now()` 获取，或者使用 `t.Day()` 、 `t.Minute()` 等等来获取时间的一部分；你甚至可以自定义时间格式化字符串，例如： `fmt.Printf("%02d.%02d.%4d\n", t.Day(), t.Month(), t.Year())` 将会输出 21.07.2011 。
+
+### 1.9 指针
+
+Go 语言为程序员提供了控制数据结构的指针的能力；但是，你不能进行指针运算。
+
+Go 语言允许你控制特定集合的数据结构、分配的数量以及内存访问模式，这些对构建运行良好的系统是非常重要的：指针对于性能的影响是不言而喻的，而如果你想要做的是系统编程、操作系统或者网络应用，指针更是不可或缺的一部分。
+
+```go
+package main
+import "fmt"
+func main(){
+    var i = 5
+    var iP *int
+    iP = &i
+}
+```
+
+对于上述代码之间变量的关系可以用下图来表示
+
+![image-20220319202343177](Go笔记.assets/image-20220319202343177.png)
+
+指针的一个高级应用是你可以传递一个变量的引用（如函数的参数），这样不会传递变量的拷贝。指针传递是很廉价的，**只占用 4 个或 8 个字节**。当程序在工作中需要占用大量的内存，或很多变量，或者两者都有，使用指针会减少内存占用和提高效率。**被指向的变量也保存在内存中**，直到没有任何指针指向它们，所以从它们被创建开始就具有相互独立的生命周期。
+
+## 2 控制结构
+
+### 2.1 if-else 结构
+
+```go
+if condition {
+ 	// todo
+}else{
+    // todo
+}
+```
+
+```go
+if condition1{
+     // todo 
+}else if condition2{
+	// todo
+}else{
+	// todo
+}
+```
+
+```go
+if val := 10; val > max{
+    // todo
+}
+```
+
+### 2.2 测试多返回值函数的错误
+
+Go 语言的函数经常使用两个返回值来表示执行是否成功：返回**某个值**以及 **true** 表示成功；返回**零值**（或 nil）和 **false** 表示失败。
+
+当**不使用 true 或 false** 的时候，也可以使用一个 **error 类型**的变量来代替作为第二个返回值：**成功执行的话，error 的值为 nil**，否则就会包含相应的错误信息。
+
+```
+t, ok := mySqrt(25.0)
+if ok {
+	fmt.Println(t)
+}
+```
+
+
+
+### 2.3 switch 结构
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
