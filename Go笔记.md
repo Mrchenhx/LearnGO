@@ -844,7 +844,7 @@ func main(){
 
 指针的一个高级应用是你可以传递一个变量的引用（如函数的参数），这样不会传递变量的拷贝。指针传递是很廉价的，**只占用 4 个或 8 个字节**。当程序在工作中需要占用大量的内存，或很多变量，或者两者都有，使用指针会减少内存占用和提高效率。**被指向的变量也保存在内存中**，直到没有任何指针指向它们，所以从它们被创建开始就具有相互独立的生命周期。
 
-## 2 控制结构
+## 2. 控制结构
 
 ### 2.1 if-else 结构
 
@@ -889,11 +889,541 @@ if ok {
 
 ### 2.3 switch 结构
 
+相比较 C 和 Java 等其它语言而言，Go 语言中的 switch 结构使用上更加灵活。它接受任意形式的表达式：
+
+同时测试多个可能符合条件的值，使用逗号分割它们，例如： case val1, val2, val3 
+
+一旦成功地匹配到某个分支，在执行完相应代码后就会退出整个 switch 代码块，也就是说您不需要特别使用 `break` 语句来表示结束。
+
+因此，程序也不会自动地去执行下一个分支的代码。如果在执行完每个分支的代码后，还希望继续执行后续分支的代 码，可以使用 `fallthrough` 关键字来达到目的。
+
+在 `case ...:` 语句之后，您不需要使用花括号将多行语句括起来，但您可以在分支中进行任意形式的编码。
+
+若代码只有一行时，可以直接放置在 `case` 后面。
+
+同样可以使用 return 语句来提前结束代码块的执行。
+
+```go
+func swc(condition string) (v string){
+	// condition 可以是任意类型
+	switch condition {
+	case "1","4":
+		fmt.Println("condition equals 1 or 4")
+		// 提前退出可以使用break，或 return
+	case "2fdsfdsf":
+		fmt.Println("condition equals 2 ")
+		// 继续执行下一个case不跳出
+		fallthrough
+	case "-1":
+		fmt.Println("condition equals -1 ")
+	case "-122":
+		fmt.Println("condition equals -1 ")
+	default:
+		fmt.Println("do not enter any number")
+	}
+	return condition
+}
+```
+
+除了上面形式，还有第二种形式，即不提供任何被判断的值，然后在每个 case 分支中进行测试不同的条件
+
+```go
+switch {
+    case i < 0:
+    //
+    case i == 0:
+    //
+    default:
+    //
+}
+```
+
+第三种使用形式：判断条件是一个初始化语句
+
+```go
+switch result := cal(); {
+    case result < 0:
+    // 
+    case result > 0:
+    // 
+    default:
+    //
+}
+```
+
+switch 语句还可以被用于 `type-switch` 来判断某个 `interface` 变量中实际存储的变量类型。
+
+```go
+switch t := areaIntf.(type) {
+	case *Square:
+		fmt.Printf("Type Square %T with value %v\n", t, t)
+	case *Circle:
+		fmt.Printf("Type Circle %T with value %v\n", t, t)
+	case nil:
+		fmt.Printf("nil value: nothing to check?\n")
+	default:
+		fmt.Printf("Unexpected type %T\n", t)
+	}
+```
+
+### 2.4 for 结构
+
+#### 2.4.1 基于计数器的迭代
+
+```go
+func main(){
+    for i := 0; i < 3; i++ {
+        fmt.Println("This is the %d iteration", i)
+    }
+}
+```
+
+for 嵌套：
+
+```
+for i := 0; i < 5; i++{
+	for j := 0;  j < 5; j++{
+	
+	}
+}
+```
+
+#### 2.4.2 基于条件判断的迭代
+
+for 结构的第二种形式是没有头部的条件判断迭代（类似其它语言中的 while 循环），基本形式为： `for 条件语句 {}` 。
+
+```
+func main(){
+	var i int = 5
+	for i >= 0{
+		i -= 2
+		fmt.Println(i)
+	}
+}
+```
+
+#### 2.4.3 无限循环
+
+条件语句是可以被省略的，如 `i:=0; ; i++` 或 `for { }` 或 `for ;; { }` （ ;; 会在使用 gofmt 时被移 除）：这些循环的本质就是**无限循环**。**最后一个形式**也可以被改写为 **for true** { } ，但**一般情况下都会直接写 for { }** 。
+
+无限循环的经典应用是服务器，用于不断等待和接受新的请求。
+
+```go
+for t, err = p.Token(); err == nil; t, err = p.Token() {
+	...
+ }
+```
+
+#### 2.4.4 for-range 结构
+
+这是 Go 特有的一种的迭代结构，您会发现它在许多情况下都非常有用。它可以迭代任何一个集合（包括数组和 map，详见第 7 和 8 章）。语法上很**类似其它语言中 `foreach` 语句**，但您依旧可以获得每次迭代所对应的索引。 一般形式为： **for ix, val := range coll { }** 。
+
+要注意的是， `val` 始终为集合中对应索引的值拷贝，因此它一般只具有只读性质，对它所做的任何修改都不会影响到集合中原有的值（译者注：**如果 `val` 为指针，则会产生指针的拷贝，依旧可以修改集合中的原值**）。一个字符串是 Unicode 编码的字符（或称之为 `rune` ）集合，因此您也可以用它迭代字符串：
+
+```Go
+for pos, char := range str{
+ // ...
+}
+```
+
+每个 rune 字符和索引在 for-range 循环中是一一对应的。它能够自动根据 UTF-8 规则识别 Unicode 编码的字符。
+
+### 2.5 Break 与 continue
+
+一个 break 的作用范围为该语句出现后的最内部的结构，它可以被用于任何形式的 for 循环（计数器、条件判断等）。但在 `switch` 或 `select` 语句中，break 语句的作用结果是**跳过整个代码块**，执行后续的代码。
+
+同其他语言类似，break 只能跳出当前循环，continue则是继续下一次循环。
+
+### 2.6 标签与 goto
+
+for、switch 或 select 语句都可以配合标签（label）形式的标识符使用，即某一行第一个以冒号（ : ）结尾的单词（gofmt 会将后续代码自动移至下一行）。
+
+```go
+LABEL1:
+	for i := 0; i <= 5; i++ {
+		for j := 0; j <= 5; j++ {
+			if j == 4 {
+				continue LABEL1
+			}
+			fmt.Printf("i is: %d, and j is: %d\n", i, j)
+		}
+	}
+```
+
+本例中，`continue` 语句指向 `LABEL1`，当执行到该语句的时候，就会跳转到 LABEL1 标签的位置。 
+
+您可以看到**当 j == 4 和 j == 5 的时候，没有任何输出：**标签的作用对象为外部循环，因此 **i 会直接变成下一个循环的值**，而此时 j 的值就被重设为 0，即它的初始值。如果将 `continue` 改为 `break`，则不会只退出内层循环， 而是直接退出外层循环了。另外，还可以使用 goto 语句和标签配合使用来模拟循环。
+
+## 3. 函数
+
+### 3.1 介绍
+
+每一个程序都包含很多的函数：函数是基本的代码块。
+
+Go是**编译型语言**，所以**函数编写的顺序是无关紧要的**；鉴于可读性的需求，最好把 main() 函数写在文件的前面，其他函数按照一定逻辑顺序进行编写（例如函数被调用的顺序）。
+
+Go 里面有三种类型的函数： 
+
+- 普通的带有名字的函数 
+- 匿名函数或者lambda函数（参考 第 6.8 节） 
+- 方法（Methods，参考 第 10.6 节）
+
+如果需要申明一个在外部定义的函数，你只需要给出函数名与函数签名，不需要给出函数体：
+
+```go
+func flushICache(begin, end uintptr) // implemented externally
+```
+
+函数也可以以申明的方式被使用，作为一个函数类型，就像：
+
+```go
+type binOp func(int, int) int
+```
+
+### 3.2 函数参数与返回值
+
+Go 的函数返回值可以有多个。这是不同于 C/C++/Java/C# 的一大特性。
+
+函数定义时，它的形参一般是有名字的，不过我们也可以定义没有形参名的函数，只有相应的形参类型，就像这样： `func f(int, int, float64)` 。
+
+没有参数的函数通常被称为 **niladic** 函数（niladic function），就像 `main.main()` 。
+
+#### 3.2.1 按值传递（call by value） 按引用传递（call by reference）
+
+Go 默认使用按值传递来传递参数，也就是传递参数的副本。函数接收参数副本之后，在使用变量的过程中可能对副本的值进行更改，但不会影响到原来的变量，比如 `Function(arg1)` 。
+
+如果你希望函数可以直接修改参数的值，而不是对参数的副本进行操作，你需要将参数的地址（变量名前面添加&符号，比如 &variable）传递给函数，这就是按引用传递，比如 `Function(&arg1)`，此时传递给函数的是一个指针。
+
+如果传递给函数的是一个指针，**指针的值（一个地址）会被复制**，但指针的值所指向的地址上的值不会被复制；我们可以通过这个指针的值来修改这个值所指向的地址上的值。
+
+> 指针也是变量类型，有自己的地址和值，通常指针的值指向一个变量的地址。所以，按引用传递也是按值传递。
+
+在函数调用时，像切片（slice）、字典（map）、接口（interface）、通道（channel）这样的引用类型都是默认使用**引用传递**（即使没有显式的指出指针）。
+
+#### 3.2.2 命名的返回值（named return variables）
+
+即在函数的返回值位置的变量有变量名，而非只有数据类型。
+
+```go
+func f1(a int )(int, int){
+    // ...
+    // v1,v2是函数体内定义好的变量。
+    return v1, v2
+}
+func f2(a int) (v1 int, v2 int){
+	// ...
+	return v1, v2;
+	// 下面的 return 起到同样效果
+	return 
+}
+```
+
+
+
+#### 3.2.3 空白符（blank identifier）
+
+空白符用来匹配一些不需要的值，然后丢弃掉。
+
+`ThreeValues` 是拥有三个返回值的不需要任何参数的函数，在下面的例子中，我们将第一个与第三个返回值赋给了 `i1` 与 `f1` 。第二个返回值赋给了空白符 _ ，然后自动丢弃掉。
+
+```go
+package main
+import "fmt"
+func main() {
+    var i1 int
+    var f1 float32
+    i1, _, f1 = ThreeValues()
+    fmt.Printf("The int: %d, the float: %f \n", i1, f1)
+}
+func ThreeValues() (int, int, float32) {
+	return 5, 6, 7.5
+}
+
+```
+
+另外一个示例，函数接收两个参数，比较它们的大小，然后按小-大的顺序返回这两个数，示例代码为minmax.go。
+
+```go
+package main
+import "fmt"
+func main() {
+	var min, max int
+	min, max = MinMax(4478, 65)
+	fmt.Printf("Minmium is: %d, Maximum is: %d\n", min, max)
+}
+func MinMax(a int, b int) (min int, max int) {
+	if a < b {
+		min = a
+		max = b
+	} else { // a = b or a < b
+		min = b
+		max = a
+	}
+	return
+}
+```
+
+#### 3.2.4 改变外部变量（outside variable）
+
+传递指针给函数不但可以节省内存（因为没有复制变量的值），而且赋予了函数直接修改外部变量的能力，所以被修改的变量不再需要使用 return 返回。如下的例子， reply 是一个指向 int 变量的指针，通过这个指针，我们在函数内修改了这个 int 变量的数值。
+
+```go
+package main
+import (
+	"fmt"
+)
+// this function changes reply:
+func Multiply(a, b int, reply *int) {
+	*reply = a * b
+}
+func main() {
+	n := 0
+	reply := &n
+	Multiply(10, 5, reply)
+	fmt.Println("Multiply:", *reply) // Multiply: 50
+}
+```
+
+### 3.3 传递变长参数
+
+如果函数的最后一个参数是采用 ...type 的形式，那么这个函数就可以处理一个变长的参数，这个长度可以为 0，这样的函数称为变参函数。
+
+```go
+func myFunc(a, b, arg ...int) {}
+```
+
+示例函数和调用：
+
+```go
+func Greeting(prefix string, who ...string)
+Greeting("hello:", "Joe", "Anna", "Eileen")
+```
+
+在 Greeting 函数中，变量 who 的值为 `[]string{"Joe", "Anna", "Eileen"}` 。
+
+如果参数被存储在一个数组 arr 中，则可以通过 `arr...` 的形式来传递参数调用变参函数。
+
+```go
+package main
+import "fmt"
+func main() {
+	x := min(1, 3, 2, 0)
+	fmt.Printf("The minimum is: %d\n", x)
+	arr := []int{7, 9, 3, 5, 1}
+	x = min(arr...)
+	fmt.Printf("The minimum in the array arr is: %d", x)
+}
+func min(a ...int) int {
+	if len(a) == 0 {
+		return 0
+	}
+	min := a[0]
+	for _, v := range a {
+		if v < min {
+			min = v
+		}
+	}
+	return min
+}
+```
+
+### 3.4 defer 和追踪
+
+关键字 defer 允许我们推迟到函数返回之前（或任意位置执行 return 语句之后）一刻才执行某个语句或函数（为什么要在返回之后才执行这些语句？因为 return 语句同样可以包含一些操作，而不是单纯地返回某个值）。
+
+关键字 defer 的用法类似于面向对象编程语言 Java 和 C# 的 finally 语句块，它一般用于释放某些已分配的资源。
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+   function1()
+}
+
+func function1() {
+   fmt.Printf("In function1 at the top\n")
+   defer function2()
+   //function2()
+   fmt.Printf("In function1 at the bottom!\n")
+}
+
+func function2() {
+   fmt.Printf("function2: Deferred until the end of the calling function!\n")
+}
+```
+
+作用：在函数结束的时候返回 defer 的位置，然后执行 defer 的语句，使用的变量值应看 defer 之前的值。
+
+当有多个 defer 行为被注册时，它们会以逆序执行（类似栈，即后进先出）：
+
+```go
+func function1() {
+   for i := 0; i < 5; i++ {
+      defer fmt.Println(i)
+   }
+}
+```
+
+关键字 defer 允许我们进行一些函数执行完成后的收尾工作，例如： 
+
+- 关闭文件流 （详见 第 12.2 节） 
+
+  ```go
+  // open a file
+  defer file.Close() 
+  ```
+
+- 解锁一个加锁的资源 （详见 第 9.3 节） 
+
+  ```go
+  mu.Lock() 
+  defer mu.Unlock() 
+  ```
+
+- 打印最终报告 
+
+  ```
+  printHeader() 
+  defer printFooter() 
+  ```
+
+- 关闭数据库链接 
+
+  ```
+  open a database connection 
+  defer disconnectFromDB() 
+  ```
+
+合理使用 defer 语句能够使得代码更加简洁。 
+
+以下代码模拟了上面描述的第 4 种情况： 
+
+```go
+package main
+import "fmt"
+func main() {
+	doDBOperations()
+}
+func connectToDB() {
+	fmt.Println("ok, connected to db")
+}
+func disconnectFromDB() {
+	fmt.Println("ok, disconnected from db")
+}
+func doDBOperations() {
+	connectToDB()
+	fmt.Println("Defering the database disconnect.")
+	defer disconnectFromDB() //function called here with defer
+	fmt.Println("Doing some DB operations ...")
+	fmt.Println("Oops! some crash or network error ...")
+	fmt.Println("Returning from function here!")
+	return //terminate the program
+	// deferred function executed here just before actually returning, even if
+	// there is a return or abnormal termination before
+}
+```
+
+使用 defer 语句实现代码追踪
+
+### 3.5 内置函数
+
+Go 语言拥有一些不需要进行导入操作就可以使用的内置函数。它们有时可以针对不同的类型进行操作，例如：len、cap 和 append，或必须用于系统级的操作，例如：panic。因此，它们需要直接获得编译器的支持。
+
+![image-20220320222723140](Go笔记.assets/image-20220320222723140.png)
+
+### 3.6 递归函数
+
+当一个函数在其函数体内调用自身，则称之为递归。
+
+Go 语言中也可以使用相互调用的递归函数：多个函数之间相互调用形成闭环。因为 Go 语言编译器的特殊性，这些函数的声明顺序可以是任意的。下面这个简单的例子展示了函数 odd 和 even 之间的相互调用。
+
+```go
+package main
+import (
+   "fmt"
+)
+func main() {
+   fmt.Printf("%d is even: is %t\n", 16, even(16)) // 16 is even: is true
+   fmt.Printf("%d is odd: is %t\n", 17, odd(17))
+   // 17 is odd: is true
+   fmt.Printf("%d is odd: is %t\n", 18, odd(18))
+   // 18 is odd: is false
+}
+func even(nr int) bool {
+   if nr == 0 {
+      return true
+   }
+   return odd(RevSign(nr) - 1)
+}
+func odd(nr int) bool {
+   if nr == 0 {
+      return false
+   }
+   return even(RevSign(nr) - 1)
+}
+func RevSign(nr int) int {
+   if nr < 0 {
+      return -nr
+   }
+   return nr
+}
+```
+
+### 3.7 将函数作为参数
+
+函数可以作为其它函数的参数进行传递，然后在其它函数内调用执行，一般称之为回调。
+
+```go
+package main
+
+import (
+   "fmt"
+)
+
+func main() {
+   callback(1, Add)
+}
+
+func Add(a, b int) {
+   fmt.Printf("The sum of %d and %d is: %d\n", a, b, a+b)
+}
+// 第二个参数是函数，方法名是 f，参数为两个int
+func callback(y int, f func(int, int)) {
+   f(y, 2) // this becomes Add(1, 2)
+}
+```
+
+> The sum of 1 and 2 is: 3
+
+将函数作为参数的最好的例子是函数 `strings.IndexFunc()` ：
+
+该函数的签名是 `func IndexFunc(s string, f func(c int) bool) int` ，它的返回值是在函数 `f(c)` 返回 true、-1 或从未返回时的索引值。
+
+例如 `strings.IndexFunc(line, unicode.IsSpace)` 就会返回 `line` 中第一个空白字符的索引值。
 
 
 
 
 
+### 3.8 闭包
+
+
+
+### 3.9 应用闭包：将函数作为返回值
+
+
+
+### 3.10 使用闭包调试
+
+
+
+### 3.11 计算函数执行时间
+
+
+
+### 3.12 通过内存缓存来提升性能
 
 
 
