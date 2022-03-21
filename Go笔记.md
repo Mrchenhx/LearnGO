@@ -1403,35 +1403,623 @@ func callback(y int, f func(int, int)) {
 
 例如 `strings.IndexFunc(line, unicode.IsSpace)` 就会返回 `line` 中第一个空白字符的索引值。
 
-
-
-
-
 ### 3.8 闭包
 
+当我们不希望给函数起名字的时候，可以使用匿名函数，例如： func(x, y int) int { return x + y } 。
 
+这样的一个函数不能够独立存在（编译器会返回错误： non-declaration statement outside function body ），但可以被赋值于某个变量，即保存函数的地址到变量中： `fplus := func(x, y int) int { return x + y }` ，然后通过变量名对函数进行调用： `fplus(3,4)` 。
+
+也可以直接对匿名函数进行调用： `func(x, y int) int { return x + y } (3, 4)` 。
+
+```go
+// 计算从 1 到 1 百万整数的总和的匿名函数：
+func () {
+   sum := 0
+   for i := 1; i <= 1e6; i++ {
+      sum += i
+   }
+}()
+```
+
+表示参数列表的第一对括号必须紧挨着关键字 `func` ，因为匿名函数没有名称。**花括号 {} 涵盖着函数体**，最后的一对**括号表示对该匿名函数的调用**。
+
+下面的例子展示了如何将匿名函数赋值给变量并对其进行调用（function_literal.go）：
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+   f()
+}
+func f() {
+   for i := 0; i < 4; i++ {
+      g := func(i int) { fmt.Printf("%d ", i) } //此例子中只是为了演示匿名函数可分配不同的内存地址，在现实开发中，不应该 把该部分信息放置到循环中。
+      g(i)
+      fmt.Printf(" - g is of type %T and has value %v\n", g, g)
+   }
+}
+```
+
+我们可以看到变量 g 代表的是 func(int) ，变量的值是一个内存地址。 
+
+所以我们实际上拥有的是一个函数值：匿名函数可以被赋值给变量并作为值使用。
+
+---
+
+```go
+package main
+
+import "fmt"
+
+func f() (ret int) {
+   defer func() {
+      ret++
+   }()
+   return 1
+}
+func main() {
+   fmt.Println(f())
+}
+```
+
+输出为2，变量 ret 的值为 2，因为 ret++ 是在执行 return 1 语句后发生的。
+
+这可用于在返回语句之后修改返回的 error 时使用。
+
+> 此处 ret 等于 2，是因为 defer 延迟的是一个匿名函数，函数中用到的 ret 变量应该是 return 语句执行后的值。
 
 ### 3.9 应用闭包：将函数作为返回值
 
+在程序 function_return.go 中我们将会看到函数 Add2 和 Adder 均会返回签名为 func(b int) int 的函数：
 
+```go
+func Add2() (func(b int) int)
+func Adder(a int) (func(b int) int)
+```
+
+函数 Add2 不接受任何参数，但函数 Adder 接受一个 int 类型的整数作为参数。
+
+以将 Adder 返回的函数存到变量中。
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+   // make an Add2 function, give it a name p2, and call it:
+   p2 := Add2()
+   fmt.Printf("Call Add2 for 3 gives: %v\n", p2(3))
+   // make a special Adder function, a gets value 3:
+   TwoAdder := Adder(2)
+   fmt.Printf("The result is: %v\n", TwoAdder(3))
+}
+
+func Add2() func(b int) int {
+   return func(b int) int {
+      return b + 2
+   }
+}
+
+func Adder(a int) func(b int) int {
+   return func(b int) int {
+      return a + b
+   }
+}
+```
+
+> Call Add2 for 3 gives: 5 
+>
+> The result is: 5
+
+下例为一个略微不同的实现（function_closure.go）：
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+   var f = Adder()
+   fmt.Print(f(1), " - ")
+   fmt.Print(f(20), " - ")
+   fmt.Print(f(300))
+}
+
+func Adder() func(int) int {
+   var x int
+   return func(delta int) int {
+      x += delta
+      return x
+   }
+}
+```
+
+函数 Adder() 现在被赋值到变量 f 中（类型为 func(int) int ）。
+
+> 1 - 21 - 321
+
+三次调用函数 f 的过程中函数 Adder() 中变量 **delta** 的值分别为：**1、20 和 300**。
+
+在多次调用中，**变量 x 的值是被保留**的，即 0 + 1 = 1 ，然后 1 + 20 = 21 ，最后 21 + 300 = 321 ：
+
+闭包函数**保存并积累其中的变量的值**，不管外部函数退出与否，它**都能够继续操作外部函数中的局部变量**。
+
+在闭包中使用到的变量可以是在闭包函数体内声明的，也可以是在外部函数声明的： 
+
+```go
+var g int
+go func (i int) {
+   s := 0
+   for j := 0; j < i; j++ {
+      s += j
+   }
+   g = s
+}(1000) // Passes argument 1000 to the function literal.
+```
+
+这样闭包函数就能够被应用到整个集合的元素上，并修改它们的值。然后这些变量就可以用于表示或计算全局或平均值。
+
+##### 工厂函数
+
+一个返回值为另一个函数的函数可以被称之为工厂函数，这在您需要创建一系列相似的函数的时候非常有用：书写一个工厂函数而不是针对每种情况都书写一个函数。下面的函数演示了如何动态返回追加后缀的函数：
+
+```go
+func MakeAddSuffix(suffix string) func(string) string {
+   return func(name string) string {
+      if !strings.HasSuffix(name, suffix) {
+         return name + suffix
+      }
+      return name
+   }
+}
+```
+
+现在，我们可以生成如下函数：
+
+```go
+addBmp := MakeAddSuffix(“.bmp”)
+addJpeg := MakeAddSuffix(“.jpeg”)
+```
+
+然后调用它们：
+
+```go
+addBmp := MakeAddSuffix(“.bmp”)
+addJpeg := MakeAddSuffix(“.jpeg”)
+```
+
+可以返回其它函数的函数和接受其它函数作为参数的函数均被称之为高阶函数，是函数式语言的特点。
 
 ### 3.10 使用闭包调试
+
+当您在分析和调试复杂的程序时，无数个函数在不同的代码文件中相互调用，如果这时候能够准确地知道哪个文件中的具体哪个函数正在执行，对于调试是十分有帮助的。您可以使用 `runtime` 或 `log` 包中的特殊函数来实现这样的功能。包 `runtime` 中的函数 `Caller()` 提供了相应的信息，因此可以在需要的时候实现一个 `where()` 闭包函数来打印函数执行的位置：
+
+```go
+where := func () {
+   _, file, line, _ := runtime.Caller(1)
+   log.Printf("%s:%d", file, line)
+}
+where()
+// some code
+where()
+// some more code
+where()
+```
+
+也可以设置 log 包中的 flag 参数来实现：
+
+```go
+log.SetFlags(log.Llongfile)
+log.Print("")
+```
+
+或使用一个更加简短版本的 where 函数：
+
+```go
+var where = log.Print
+ func func1() {
+where()
+... some code
+where()
+... some code
+where()
+}
+```
+
+
 
 
 
 ### 3.11 计算函数执行时间
 
-
+```go
+start := time.Now()
+longCalculation()
+end := time.Now()
+delta := end.Sub(start)
+fmt.Printf("longCalculation took this amount of time: %s\n", delta)
+```
 
 ### 3.12 通过内存缓存来提升性能
 
+当在进行大量的计算时，提升性能最直接有效的一种方式就是避免重复计算。
+
+通过在内存中缓存和重复利用相同计算的结果，称之为内存缓存。
 
 
 
+```go
+package main
+
+import (
+   "fmt"
+   "time"
+)
+
+const LIM = 41
+
+var fibs [LIM]uint64
+
+func main() {
+   var result uint64 = 0
+   start := time.Now()
+   for i := 0; i < LIM; i++ {
+      result = fibonacci(i)
+      fmt.Printf("fibonacci(%d) is: %d\n", i, result)
+   }
+   end := time.Now()
+   delta := end.Sub(start)
+   fmt.Printf("longCalculation took this amount of time: %s\n", delta)
+}
+
+func fibonacci(n int) (res uint64) {
+   // memoization: check if fibonacci(n) is already known in array:
+   if fibs[n] != 0 {
+      res = fibs[n]
+      return
+   }
+   if n <= 1 {
+      res = 1
+   } else {
+      res = fibonacci(n-1) + fibonacci(n-2)
+   }
+   fibs[n] = res
+   return
+}
+```
+
+## 4. 数组与切片
+
+### 4.1 声明和初始化
+
+#### 4.1.1 概念 
+
+数组是具有**相同唯一类型**的一组已编号且**长度固定**的数据项序列（这是一种同构的数据结构）；这种类型可以是任意的原始类型例如整型、字符串或者自定义类型。
+
+数组元素可以通过 **索引**（位置）来读取（或者修改），索引从 0 开始，第一个元素索引为 0，第二个索引为 1，以此类推。（数组以 0 开始在所有类 C 语言中是相似的）。元素的数目，也称为长度或者**数组大小必须是固定**的并且在**声明该数组时就给出**（编译时需要知道数组长度以便分配内存）；数组长度最大为 2Gb。
+
+```go
+var arr [5]int = [5]int{1,2,3,4,5}
+// var arr [3]int // 未初始化
+```
+
+在内存中的结构是：
+
+![image-20220321143645106](Go笔记.assets/image-20220321143645106.png)
+
+每个元素是一个整型值，当声明数组时所有的元素都会被自动初始化为默认值 0。
+
+对索引项为 i 的数组元素赋值可以这么操作： arr[i] = value ，所以数组是 **可变的**。
+
+Go 语言中的数组是一种 **值类型**（不像 C/C++ 中是指向首元素的指针），所以可以通过 new() 来创建： var arr1 = new([5]int) 。
+
+arr1 的类型是 ***[5]int** ，而 arr2 的类型是 **[5]int** 
+
+这样的结果就是`当把一个数组赋值给另一个时，需要在做一次数组内存的拷贝操作`。例如：
+
+```go
+arr2 := *arr1 // 本质上是获取了 arr1 上的内容然后进行拷贝操作
+arr2[2] = 100
+```
+
+这样两个数组就有了不同的值，在赋值后修改 arr2 不会对 arr1 生效。（arr2 是值类型，所以进行了值拷贝操作）
+
+所以在函数中数组作为参数传入时，如 func1(arr2) ，会产生一次数组拷贝，func1 方法不会修改原始的数组 arr2。
+
+#### 4.1.2 数组常量
+
+```go
+var arr1 [3]int = [3]int{1,2,3}
+var arr2 []int = []int{1,2,3}
+arr3 := [3]int{1,2,3}
+arr4 := [...]{1,2,3,4,5,6}
+var arr5 = new([5]int)
+arr5[2] = 3
+```
+
+由于索引的存在，遍历数组的方法自然就是使用 for 结构:
+
+- 通过 for 初始化数组项
+- 通过 for 打印数组元素
+- 通过 for 依次处理元素
+
+用法一：
+
+```go
+for i := 0; i < len(arr); i++{
+	arr[i] = ... 
+}
+```
+
+用法二：
+
+for-range方式
+
+```go
+for idx, val := range arr{
+	fmt.Println(idx, val)
+}
+```
+
+第一个接收参数是下标，第二个是值。
+
+如果数组值已经提前知道了，那么可以通过 数组常量 的方法来初始化数组，而不用依次使用 []= 方法（所有的组成元素都有相同的常量语法）。
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+    // 第一种变化
+   // var arrAge = [5]int{18, 20, 15, 22, 16}
+    // 第二种变化：... 可以忽略，从技术上说它们其实变化成了切片。
+   // var arrLazy = [...]int{5, 6, 7, 8, 22}
+   // var arrLazy = []int{5, 6, 7, 8, 22}
+    // 第三种变化： key: value syntax
+    // 只有索引 3 和 4 被赋予实际的值，其他元素都被设置为空的字符串
+   var arrKeyValue = [5]string{3: "Chris", 4: "Ron"}
+   // var arrKeyValue = []string{3: "Chris", 4: "Ron"}
+
+   for i := 0; i < len(arrKeyValue); i++ {
+      fmt.Printf("Person at %d is %s\n", i, arrKeyValue[i])
+   }
+}
+```
+
+#### 4.1.2 多维数组
+
+数组通常是一维的，但是可以用来组装成多维数组，例如： `[3][5]int `，`[2][2][2]float64`
+
+内部数组总是长度相同的。Go 语言的多维数组是矩形式的（唯一的例外是切片的数组)
+
+定义方式：
+
+```go
+var arr [2][2]int = [2][2]int{{1,2},{4,5}}
+arr1 := [2][2]int{{1,2},{4,5}}
+// 没有参数的话会以初始化的长度进行设定。
+var arr [][2]int = [][2]int{{1,2},{4,5}}
+arr1 := [][2]int{{1,2},{4,5}}
+// new 方式生成数组
+var arr2 = new([1][1]int)
+```
+
+#### 4.1.4 将数组传递给函数
+
+把一个大数组传递给函数会消耗很多内存。有两种方法可以避免这种现象：
+
+- 传递数组的指针 
+- 使用数组的切片
+
+第一种方法：
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+   array := [3]float64{7.0, 8.5, 9.1}
+    // 传数组指针
+   x := Sum(&array) // Note the explicit address-of operator
+   // to pass a pointer to the array
+   fmt.Printf("The sum of the array is: %f", x)
+}
+
+func Sum(a *[3]float64) (sum float64) {
+   for _, v := range a { // derefencing *a to get back to the array is not necessary!
+      sum += v
+   }
+   return
+}
+```
+
+### 4.2 切片 
+
+#### 4.2.1 切片
+
+切片（slice）是对**数组一个连续片段的引用**（该数组我们称之为相关数组，通常是匿名的），所以**切片是一个引用类型**（因此更类似于 C/C++ 中的数组类型，或者 Python 中的 list 类型）。这个片段可以是整个数组，或者是由起始和终止索引标识的一些项的子集。需要注意的是，终止索引标识的项不包括在切片内。切片提供了一个相关数组的动态窗口。
+
+切片是可索引的，并且可以由 len() 函数获取长度。
+
+给定项的切片索引可能比相关数组的相同元素的索引小。和数组不同的是，**切片的长度可以在运行时修改**，**最小为 0** ，**最大为相关数组的长度**：切片是一个 **长度可变**的数组。
+
+切片提供了计算容量的函数 `cap()` 可以测量切片最长可以达到多少：它等于**切片的长度 + 数组除切片之外的长度**。如果 s 是一个切片， cap(s) 就是从 s[0] 到数组末尾的数组长度。**切片的长度永远不会超过它的容量**， 所以对于切片 s 来说该不等式永远成立： `0 <= len(s) <= cap(s)` 。
+
+多个切片如果表示同一个数组的片段，它们可以共享数据；因此一个切片和相关数组的其他切片是共享存储的，相反，**不同的数组总是代表不同的存储。数组实际上是切片的构建块**。
+
+优点 因为**切片是引用**，所以它们不需要使用额外的内存并且比使用数组更有效率，所以在 Go 代码中**切片比数组更常用**。
+
+声明切片的格式是： `var identifier []type` （不需要说明长度）。
+
+一个切片在未初始化之前默认为 nil，长度为 0。
+
+切片的初始化格式是： `var slice1 []type = arr1[start:end]` 。
+
+这表示 slice1 是由数组 arr1 从 start 索引到 end-1 索引之间的元素构成的子集（切分数组， start:end 被称为 slice 表达式）。所以 `slice1[0]` 就等于 `arr1[start]` 。这可以在 arr1 被填充前就定 义好。
+
+如果某个人写： `var slice1 []type = arr1[:]` 那么 slice1 就等于完整的 arr1 数组（所以这种表示方式是 `arr1[0:len(arr1)]` 的一种缩写）。另外一种表述方式是： `slice1 = &arr1` 。
+
+如果你想去掉 slice1 的最后一个元素，只要 `slice1 = slice1[:len(slice1)-1]` 。
+
+一个由数字 1、2、3 组成的切片可以这么生成： `s := [3]int{1,2,3}[:]` 甚至更简单的 `s := []int{1,2,3}`。
+
+`s2 := s[:]` 是用切片组成的切片，拥有相同的元素，但是仍然指向相同的相关数组。
+
+一个切片 s 可以这样扩展到它的大小上限： `s = s[:cap(s)]` ，如果再扩大的话就会导致运行时错误。
+
+对于每一个切片（包括 string），以下状态总是成立的：
+
+```go
+s == s[:i] + s[i:] // i是一个整数且: 0 <= i <= len(s)
+len(s) <= cap(s)
+```
+
+切片也可以用类似数组的方式初始化： `var x = []int{2, 3, 5, 7, 11}` 。这样就创建了一个长度为 5 的数组并且创建了一个相关切片。
+
+切片在内存中的组织方式实际上是一个有 3 个域的结构体：**指向相关数组的指针**，**切片长度**以及**切片容量**。
+
+下图给出了一个长度为 2，容量为 4 的切片。
+
+- y[0] = 3 且 y[1] = 5 。 
+- 切片 y[0:4] 由 元素 3, 5， 7 和 11 组成。
+
+![image-20220321172005155](Go笔记.assets/image-20220321172005155.png)
+
+`cap()` 函数记录的是左指针到原数组右边界的大小。
+
+#### 4.2.2 将切片传递给函数
+
+如果你有一个函数需要对数组做操作，你可能总是需要把参数声明为切片。当你调用该函数时，把数组分片，创建为一个 切片引用并传递给该函数。
+
+```go
+func sum(a []int) int {
+	s := 0
+    for i := 0; i < len(a); i++{
+        s += a[i];
+    }
+    return s;
+}
+func main(){
+    var arr = [5]int{0,1,2,3,4}
+    sum(arr[:])
+}
+
+```
+
+#### 4.2.3 用 make() 创建一个切片
+
+当相关数组还没有定义时，我们可以使用 make() 函数来创建一个切片 同时创建好相关数组： `var slice1 []type = make([]type, len)` 。
+
+也可以简写为 `slice1 := make([]type, len)` ，这里 len 是数组的长度并且也是 slice 的初始长度。
+
+定义 `s2 := make([]int, 10)` ，那么 `cap(s2) == len(s2) == 10` 。
+
+make 接受 2 个参数：**元素的类型**以及**切片的元素个数**。
+
+如果你想创建一个 slice1，它不占用整个数组，而只是占用以 len 为个数个项，那么只要： `slice1 := make([]type, len, cap)` 。
+
+make 的使用方式是： `func make([]T, len, cap)` ，其中 cap 是可选参数。
+
+下面两种方法可以生成相同的切片:
+
+```go
+make([]int, 50, 100)
+new([100]int)[0:50]
+```
+
+下图描述了使用 make 方法生成的切片的内存结构：
+
+![image-20220321183950679](Go笔记.assets/image-20220321183950679.png)
+
+#### 4.2.4 new() 和 make() 的区别
+
+看起来二者没有什么区别，都在堆上分配内存，但是它们的行为不同，适用于不同的类型。
+
+- **new(T) 为每个新的类型T分配一片内存**，初始化为 **0** 并且返回类型为 ***T** 的内存地址：这种方法 返回一个**指向类型为 T，值为 0 的地址的指针**，它适用于**值类型**如数组和结构体（参见第 10 章）；它相当于 `&T{}` 。 
+- make(T) 返回一个**类型为 T 的初始值**，它只适用于3种内建的引用类型：切片、map 和 channel。
+
+换言之，new 函数分配内存，make 函数初始化；下图给出了区别：
+
+![image-20220321231133554](Go笔记.assets/image-20220321231133554.png)
+
+在图 7.3 的第一幅图中：
+
+```go
+var p *[]int = new([]int) // *p == nil; with len and cap 0
+p := new([]int)
+```
+
+在第二幅图中， p := make([]int, 0) ，切片 已经被初始化，但是指向一个空的数组。
+
+以上两种方式实用性都不高。下面的方法：
+
+```go
+var v []int = make([]int, 10, 50)
+// 或者
+v := make([]int, 10, 50)
+```
+
+这样分配一个有 50 个 int 值的数组，并且创建了一个长度为 10，容量为 50 的 切片 v，该 切片 指向数组的 前 10 个元素。
+
+#### 4.2.5 多维 切片
+
+和数组一样，切片通常也是一维的，但是也可以由一维组合成高维。通过分片的分片（或者切片的数组），长度可以任意动态变化，所以 Go 语言的多维切片可以任意切分。而且，内层的切片必须单独分配（通过 make 函数）。
+
+#### 4.2.6 bytes 包
+
+类型 `[]byte` 的切片十分常见，Go 语言有一个 bytes 包专门用来解决这种类型的操作方法。
+
+bytes 包和字符串包十分类似（参见第 4.7 节）。而且它还包含一个十分有用的类型 Buffer:
+
+```go
+import "bytes"
+type Buffer struct{
+...
+}
+```
+
+这是一个长度可变的 bytes 的 buffer，提供 Read 和 Write 方法，因为读写长度未知的 bytes 最好使用 buffer。
+
+Buffer 可以这样定义： var buffer bytes.Buffer 。
+
+或者使用 new 获得一个指针： var r *bytes.Buffer = new(bytes.Buffer) 。
+
+或者通过函数： func NewBuffer(buf []byte) *Buffer ，创建一个 Buffer 对象并且用 buf 初始化好；NewBuffer 最好用在从 buf 读取的时候使用。
+
+通过 buffer 串联字符串，类似于 Java 的 StringBuilder 类。
+
+ 在下面的代码段中，我们创建一个 buffer，通过 buffer.WriteString(s) 方法将字符串 s 追加到后面，最后再通过 buffer.String() 方法转换为 string：
+
+```go
+var buffer bytes.Buffer
+for {
+   if s, ok := getNextString(); ok { //method getNextString() not shown here
+      buffer.WriteString(s)
+   } else {
+      break
+   }
+}
+fmt.Print(buffer.String(), "\n")
+```
+
+这种实现方式比使用 += 要更节省内存和 CPU，尤其是要串联的字符串数目特别多的时候。
+
+### 4.3 For-range 结构 
 
 
 
+### 4.4 切片重组（reslice） 
 
 
 
+### 4.5 切片的复制与追加 
+
+
+
+### 4.6 字符串、数组和切片的应用
 
