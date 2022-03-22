@@ -2011,15 +2011,307 @@ fmt.Print(buffer.String(), "\n")
 
 ### 4.3 For-range 结构 
 
+这种构建方法可以应用于数组和切片:
 
+```go
+for ix, value := range slice1 {
+ ...
+}
+```
+
+第一个返回值 ix 是数组或者切片的索引，第二个是在该索引位置的值；他们都是仅在 for 循环内部可见的局部变量。value 只是 slice1 某个索引位置的值的一个拷贝，不能用来修改 slice1 该索引位置的值。
+
+多维切片下的 for-range：
+
+通过计算行数和矩阵值可以很方便的写出如（参考第 7.1.3 节）的 for 循环来，例如：
+
+```go
+for row := range screen{
+	for column := range screen[row]{
+		screen[row][column] = 1
+	}
+}
+```
 
 ### 4.4 切片重组（reslice） 
 
+我们已经知道切片创建的时候通常比相关数组小，例如：
 
+```go
+ slice1 := make([]type, start_length, capacity)
+```
+
+其中 `start_length` 作为切片初始长度而 `capacity` 作为相关数组的长度。
+
+这么做的好处是我们的切片在达到容量上限后可以扩容。改变切片长度的过程称之为切片重组 reslicing，做法如下： `slice1 = slice1[0:end]` ，其中 end 是新的末尾索引（即长度）。
+
+将切片扩展 1 位可以这么做：
+
+```go
+sl = sl[0:len(sl)+1]
+```
+
+切片可以反复扩展直到占据整个相关数组。
+
+如下示例：
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+	slice1 := make([]int, 0, 10)
+	// load the slice, cap(slice1) is 10:
+	for i := 0; i < cap(slice1); i++ {
+		slice1 = slice1[0 : i+1]
+		slice1[i] = i
+		fmt.Printf("The length of slice is %d\n", len(slice1))
+	}
+
+	// print the slice:
+	for i := 0; i < len(slice1); i++ {
+		fmt.Printf("Slice at %d is %d\n", i, slice1[i])
+	}
+}
+```
+
+```go
+var ar = [10]int{0,1,2,3,4,5,6,7,8,9}
+var a = ar[5:7] // reference to subarray {5,6} - len(a) is 2 and cap(a) is 5
+```
+
+将 a 重新分片：
+
+```go
+a = a[0:4] // ref of subarray {5,6,7,8} - len(a) is now 4 but cap(a) is still 5
+```
 
 ### 4.5 切片的复制与追加 
 
+如果想增加切片的**容量**，我们必须创建一个新的更大的切片并把原分片的内容都拷贝过来。下面的代码描述了从拷贝切片的 copy 函数和向切片追加新元素的 append 函数。
 
+```go
+package main
+
+import "fmt"
+
+func main() {
+	sl_from := []int{1, 2, 3}
+	sl_to := make([]int, 10)
+
+	n := copy(sl_to, sl_from)
+	fmt.Println(sl_to)
+	fmt.Printf("Copied %d elements\n", n) // n == 3
+
+	sl3 := []int{1, 2, 3}
+	sl3 = append(sl3, 4, 5, 6)
+	fmt.Println(sl3)
+}
+```
+
+func append(s[]T, x ...T) []T 其中 append 方法将 0 个或多个具有相同类型 s 的元素追加到切片后面并且返回新的切片；追加的元素必须和原切片的元素同类型。如果 s 的容量不足以存储新增元素，append 会分配新的切片来保证已有切片元素和新增元素的存储。因此**，返回的切片可能已经指向一个不同的相关数组了**。append 方法总是返回成功，除非系统内存耗尽了。
+
+如果你想将切片 y 追加到切片 x 后面，只要将第二个参数扩展成一个列表即可： `x = append(x, y...)` 。
+
+append 在大多数情况下很好用，但是如果你想完全掌控整个追加过程，你可以实现一个这样的 AppendByte 方法：
+
+```go
+func AppendByte(slice []byte, data ...byte) []byte {
+	m := len(slice)
+	n := m + len(data)
+	if n > cap(slice) { // if necessary, reallocate
+		// allocate double what's needed, for future growth.
+		newSlice := make([]byte, (n+1)*2)
+		copy(newSlice, slice)
+		slice = newSlice
+	}
+	slice = slice[0:n]
+	copy(slice[m:n], data)
+	return slice
+}
+```
+
+func copy(dst, src []T) int copy 方法将类型为 T 的切片从源地址 src 拷贝到目标地址 dst，覆盖 dst 的相关元素，并且返回拷贝的元素个数。源地址和目标地址可能会有重叠。拷贝个数是 src 和 dst 的长度最小值。如果 src 是字符串那么元素类型就是 byte。如果你还想继续使用 src，在拷贝结束后执行 src = dst 。
 
 ### 4.6 字符串、数组和切片的应用
+
+#### 4.6.1 从字符串生成字节切片
+
+假设 s 是一个字符串（本质上是一个字节数组），那么就可以直接通过 `c := []byte(s)` 来获取一个字节的切片 c。另外，您还可以通过 copy 函数来达到相同的目的： `copy(dst []byte, src string)` 。
+
+同样的，还可以使用 for-range 来获得每个元素：
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+	s := "\u00ff\u754c"
+	for i, c := range s {
+		fmt.Printf("%d:%c ", i, c)
+	}
+}
+//  0:ÿ 2:界
+```
+
+我们知道，Unicode 字符会占用 2 个字节，有些甚至需要 3 个或者 4 个字节来进行表示。如果发现错误的 UTF8 字符，则该字符会被设置为 U+FFFD 并且索引向前移动一个字节。
+
+和字符串转换一样，您同样可以使用 `c := []int32(s)` 语法，这样切片中的每个 int 都会包含对应的 Unicode 代码，因为字符串中的每次字符都会对应一个整数。
+
+类似的，也可以将字符串转换为元素类型为 rune 的切片： `r := []rune(s)` 。
+
+可以通过代码 `len([]int32(s))` 来获得字符串中字符的数量，但使用 `utf8.RuneCountInString(s)` 效率会更高一 点。
+
+将一个字符串追加到某一个字符数组的尾部：
+
+```go
+var b []byte
+var s string
+b = append(b, s...)
+```
+
+#### 4.6.2 获取字符串的某一部分
+
+使用 `substr := str[start:end]` 可以从字符串 str 获取到从索引 `start` 开始到 `end-1` 位置的子字符串。
+
+`str[start:]` 则表示获取从 `start` 开始到 `len(str)-1` 位置的子字符串。
+
+`str[:end]` 表示获取从 `0` 开始到 `end-1` 的子字符串。
+
+#### 4.6.3 字符串和切片的内存结构
+
+在内存中，一个字符串实际上是一个双字结构，即一个指向实际数据的指针和记录字符串长度的整数。
+
+字符串 string s = "hello" 和子字符串 t = s[2:3] 在内存中的结构可以用下图表示：
+
+![image-20220322221540041](Go笔记.assets/image-20220322221540041.png)
+
+#### 4.6.4 修改字符串中的某个字符
+
+Go 语言中的字符串是不可变的，也就是说 `str[index]` 这样的表达式是不可以被放在等号左侧的。如果尝试运行 `str[i] = 'D'` 会得到错误： `cannot assign to str[i]` 。
+
+因此，您必须先将字符串转换成字节数组，然后再通过修改数组中的元素值来达到修改字符串的目的，最后将字节数组转换回字符串格式。
+
+例如，将字符串 “hello” 转换为 “cello”：
+
+```
+s := "hello"
+c := []byte(s)
+c[9] = 'c'
+s2 := string(c)
+```
+
+#### 4.6.5 字节数组对比函数
+
+下面的 Compare 函数会返回两个字节数组字典顺序的整数对比结果，即 `0 if a == b, -1 if a < b, 1 if a > b` 。
+
+```go
+func Compare(a, b []byte) int {
+	for i := 0; i < len(a) && i < len(b); i++ {
+		switch {
+		case a[i] > b[i]:
+			return 1
+		case a[i] < b[i]:
+			return -1
+		}
+	}
+	// 数组的长度可能不同
+	switch {
+	case len(a) < len(b):
+		return -1
+	case len(a) > len(b):
+		return 1
+	}
+	return 0 // 数组相等
+}
+```
+
+#### 4.6.6 搜索及排序切片和数组
+
+标准库提供了 `sort` 包来实现常见的搜索和排序操作。您可以使用 `sort` 包中的函数 `func Ints(a []int)` 来实现对 int 类型的切片排序。例如 `sort.Ints(arri)` ，其中变量 `arri` 就是需要被升序排序的数组或切片。为了检查某个数组是否已经被排序，可以通过函数 `IntsAreSorted(a []int) bool` 来检查，如果返回 `true` 则表示已经被排序。
+
+想要在数组或切片中搜索一个元素，该数组或切片必须先被排序（因为**标准库的搜索算法使用的是二分法**）。然后，您就可以使用函数 `func SearchInts(a []int, n int) int` 进行搜索，并返回对应结果的索引值。
+
+#### 4.6.7 append 函数常见操作
+
+我们在第 7.5 节提到的 append 非常有用，它能够用于各种方面的操作：
+
+1. 将切片 b 的元素追加到切片 a 之后： a = append(a, b...) 
+
+2. 复制切片 a 的元素到新的切片 b 上：
+
+   ```go
+   b = make([]T, len(a))
+   copy(b, a)
+   ```
+
+3. 删除位于索引 i 的元素： `a = append(a[:i], a[i+1:]...)` 
+
+4. 切除切片 a 中从索引 i 至 j 位置的元素： `a = append(a[:i], a[j:]...)` 
+
+5. 为切片 a 扩展 j 个元素长度： `a = append(a, make([]T, j)...)`
+
+6. 在索引 i 的位置插入元素 x： `a = append(a[:i], append([]T{x}, a[i:]...)...)`
+
+7. 在索引 i 的位置插入长度为 j 的新切片： `a = append(a[:i], append(make([]T, j), a[i:]...)...)`
+
+8. 在索引 i 的位置插入切片 b 的所有元素： `a = append(a[:i], append(b, a[i:]...)...)` 
+
+9. 取出位于切片 a 最末尾的元素 x： `x, a = a[len(a)-1], a[:len(a)-1]` 
+
+10. 将元素 x 追加到切片 a： `a = append(a, x)`
+
+#### 4.6.8 切片和垃圾回收
+
+切片的底层指向一个数组，该数组的实际容量可能要大于切片所定义的容量。只有在没有任何切片指向的时候，底层的数组内存才会被释放，这种特性有时会导致程序占用多余的内存。
+
+示例 函数 `FindDigits` 将一个文件加载到内存，然后搜索其中所有的数字并返回一个切片。
+
+```go
+var digitRegexp = regexp.MustCompile("[0-9]+")
+func FindDigits(filename string) []byte {
+	b, _ := ioutil.ReadFile(filename)
+	return digitRegexp.Find(b)
+}
+```
+
+这段代码可以顺利运行，但返回的 `[]byte` 指向的底层是整个文件的数据。只要该返回的切片不被释放，垃圾回收 器就不能释放整个文件所占用的内存。换句话说，一点点有用的数据却占用了整个文件的内存。
+
+想要避免这个问题，可以通过拷贝我们需要的部分到一个新的切片中：
+
+```go
+func FindDigits(filename string) []byte{
+	b, _:= ioutil.ReadFile(filename)
+	b = digitRegexp.Find(b)
+	c := make([]byte, len(b))
+	copy(c, b)
+	return c
+}
+```
+
+## 5. Map
+
+map 是一种特殊的数据结构：一种元素对（pair）的无序集合，pair 的一个元素是 key，对应的另一个元素是 value，所以这个结构也称为关联数组或字典。这是一种快速寻找值的理想结构：给定 key，对应的 value 可以迅速定位。
+
+map 这种数据结构在其他编程语言中也称为字典（Python）、hash 和 HashTable 等。
+
+### 5.1 声明、初始化和 make
+
+### 5.2 测试键值对是否存在及删除元素
+
+### 5.3 for-range 的配套用法
+
+### 5.4 map 类型的切片
+
+### 5.5 map 的排序
+
+### 5.6 将 map 的键值对调
+
+
+
+
+
+
 
