@@ -4140,10 +4140,3297 @@ func (i *Integer) String() string{
 
 ### 7.7 类型的 String() 方法和格式化描述符
 
+简而言之，也就是 Java 中重写 toString() 方法。
 
+如果类型**定义了 String() 方法**，它会被用在 fmt.Printf() 中生成默认的输出：**等同于使用格式化描述符 %v 产生的输出**。
+
+不要在 String() 方法里面调用涉及 String() 方法的方法（）
+
+```go
+package main
+
+import "fmt"
+
+type TT float64
+func (t TT) String() string{
+	return fmt.Sprintf("%v", t) //这里递归调用了！！！
+}
+func main() {
+	var a TT = 66.3
+	fmt.Println(a.String())
+}
+```
 
 ### 7.8 垃圾回收和 SetFinalizer
 
+Go 开发者不需要写代码来释放程序中不再使用的变量和结构占用的内存，在 Go 运行时中有一个独立的进程，即垃圾收集器（GC），会处理这些事情，它搜索不再使用的变量然后释放它们的内存。可以通过 runtime 包访问 GC 进程。
+
+通过调用 `runtime.GC()` 函数可以显式的触发 GC，但这只在某些罕见的场景下才有用，比如**当内存资源不足时**调用 `runtime.GC()` ，它会在此函数执行的点上立即释放一大片内存，此时程序可能会有短时的性能下降（因为 GC 进程在执行）。
+
+如果想知道当前的内存状态，可以使用：
+
+```go
+// fmt.Printf("%d\n", runtime.MemStats.Alloc/1024)
+// 此处代码在 Go 1.5.1下不再有效，更正为
+var m runtime.MemStats
+runtime.ReadMemStats(&m)
+fmt.Printf("%d Kb\n", m.Alloc / 1024)
+```
+
+上面的程序会给出已分配内存的总量，单位是 Kb。
+
+如果需要在一个对象 obj 被从内存移除前执行一些特殊操作，比如写到日志文件中，可以通过如下方式调用函数来 实现：
+
+```go
+runtime.SetFinalizer(obj, func(obj *typeObj))
+```
+
+`func(obj *typeObj)` 需要一个 `typeObj` 类型的指针参数 `obj` ，特殊操作会在它上面执行。 `func` 也可以是一个匿名函数。
+
+在对象被 GC 进程选中并从内存中移除以前， SetFinalizer 都不会执行，直到程序正常结束或者发生错误。
+
+## 8. 接口（interface）与反射（reflection）
+
+### 8.1 接口是什么
+
+接口定义了一组方法（方法集），但是这些方法不包含（实现）代码：它们没有被实现（它们是抽象的）。接口里**不能包含变量**。
+
+```go
+type Namer interface{
+    Method1(param_list) return_type
+}
+```
+
+上面的 Namer 是一个 接口类型。
+
+（按照约定，**只包含一个方法的**）接口的名字由方法名加 [e]r 后缀组成，例如 Printer 、 Reader 、 Writer 、 Logger 、 Converter 等等。还有一些不常用的方式（当后缀 er 不合适时），比如 Recoverable ，此时接口名以 able 结尾，或者以 I 开头。
+
+Go 语言中的接口都很简短，通常它们会包含 **0 个**、**最多 3 个方法**。
+
+在 Go 语言中接口可以有值，一个接口类型的变量或一个 接口值 ： `var ai Namer` ， `ai` 是一个多字（`multiword`）数据结构，它的值是 `nil` 。它本质上是一个指针，虽然不完全是一回事。指向接口值的指针是非法的，它们不仅一点用也没有，还会导致代码错误。
+
+![image-20220326150930575](Go笔记.assets/image-20220326150930575.png)
+
+此处的方法指针表是通过运行时反射能力构建的。
+
+类型（比如结构体）实现接口方法集中的方法，每一个方法的实现说明了此方法是如何作用于该类型的：即实现接口，同时方法集也构成了该类型的接口。实现了 `Namer` 接口类型的变量可以赋值给 `ai` （接收者值），此时 方法表中的指针会指向被实现的接口方法。当然如果另一个类型（也实现了该接口）的变量被赋值给 `ai` ，这二者（译者注：指针和方法实现）也会随之改变。
+
+类型不需要显式声明它实现了某个接口：接口被隐式地实现。多个类型可以实现同一个接口。
+
+实现某个接口的类型（除了实现接口方法外）可以有其他的方法。
+
+一个类型可以实现多个接口。 
+
+接口类型可以包含一个实例的引用， 该实例的类型实现了此接口（接口是动态类型）。
+
+即使接口在类型之后才定义，二者处于不同的包中，被单独编译：只要类型实现了接口中的方法，它就实现了此接口。
+
+例子：
+
+```go
+package main
+
+import "fmt"
+
+type Shaper interface {
+   Area() float32
+}
+
+type Square struct {
+   side float32
+}
+
+func (sq *Square) Area() float32 {
+   return sq.side * sq.side
+}
+
+func main() {
+   sq1 := new(Square)
+   sq1.side = 5
+
+   var areaIntf Shaper
+   areaIntf = sq1
+   
+   //shorter,without separate declaration: 定义方式二
+   //areaIntf := Shaper(sq1)
+   //or even: 定义方式三
+   //areaIntf := sq1
+   fmt.Printf("The square has area: %f\n", areaIntf.Area())
+}
+```
+
+上面的程序定义了一个结构体 Square 和一个接口 Shaper ，接口有一个方法 Area() 。
+
+在 `main()` 方法中创建了一个 `Square` 的实例。在主程序外边定义了一个接收者类型是 `Square` 方法的 `Area()` ，用来计算正方形的面积：结构体 `Square` 实现了接口 `Shaper` 。
+
+所以可以将一个 Square 类型的变量赋值给一个接口类型的变量： `areaIntf = sq1` 
+
+现在接口变量包含一个指向 `Square` 变量的引用，通过它可以调用 `Square` 上的方法 `Area()` 。当然也可以直接在 `Square` 的实例上调用此方法，但是在接口实例上调用此方法更令人兴奋，它使此方法更具有一般性。接口变量里包含了接收者实例的值和指向对应方法表的指针。
+
+接口变量里包含了**接收者实例的值**和**指向对应方法表的指针**。
+
+这是多态的 Go 版本，多态是面向对象编程中一个广为人知的概念：根据当前的类型选择正确的方法，或者说：同一种类型在不同的实例上似乎表现出不同的行为。
+
+如果 `Square` 没有实现 `Area()` 方法，编译器将会给出清晰的错误信息：
+
+```go
+cannot use sq1 (type *Square) as type Shaper in assignment:
+*Square does not implement Shaper (missing Area method)
+```
+
+扩展一下上面的例子，类型 `Rectangle` 也实现了 `Shaper` 接口。接着创建一个 `Shaper` 类型的数组，迭代它的每一个元素并在上面调用 `Area()` 方法，以此来展示多态行为：
+
+```go
+package main
+
+import "fmt"
+
+type Shaper interface {
+   Area() float32
+}
+
+type Square struct {
+   side float32
+}
+
+func (sq *Square) Area() float32 {
+   return sq.side * sq.side
+}
+
+type Rectangle struct {
+   length, width float32
+}
+
+func (r Rectangle) Area() float32 {
+   return r.length * r.width
+}
+
+func main() {
+
+   r := Rectangle{5, 3} // Area() of Rectangle needs a value
+   q := &Square{5}      // Area() of Square needs a pointer
+   // shapes := []Shaper{Shaper(r), Shaper(q)}
+   // or shorter
+   shapes := []Shaper{r, q}
+   fmt.Println("Looping through shapes for area ...")
+   for n, _ := range shapes {
+      fmt.Println("Shape details: ", shapes[n])
+      fmt.Println("Area of this shape is: ", shapes[n].Area())
+   }
+}
+```
+
+在调用 `shapes[n].Area())` 这个时，只知道 `shapes[n]` 是一个 `Shaper` 对象，最后它摇身一变成为了一个 `Square` 或 `Rectangle` 对象，并且表现出了相对应的行为。
+
+下面是一个更具体的例子：有两个类型 stockPosition 和 car ，它们都有一个 getValue() 方法，我们可以定义一个具有此方法的接口 valuable 。接着定义一个使用 valuable 类型作为参数的函数 showValue() ，所有实现了 valuable 接口的类型都可以用这个函数。
+
+```go
+package main
+
+import "fmt"
+
+type stockPosition struct {
+   ticker     string
+   sharePrice float32
+   count      float32
+}
+
+/* method to determine the value of a stock position */
+func (s stockPosition) getValue() float32 {
+   return s.sharePrice * s.count
+}
+
+type car struct {
+   make  string
+   model string
+   price float32
+}
+
+/* method to determine the value of a car */
+func (c car) getValue() float32 {
+   return c.price
+}
+
+/* contract that defines different things that have value */
+type valuable interface {
+   getValue() float32
+}
+
+func showValue(asset valuable) {
+   fmt.Printf("Value of the asset is %f\n", asset.getValue())
+}
+
+func main() {
+   var o valuable = stockPosition{"GOOG", 577.20, 4}
+   showValue(o)
+   o = car{"BMW", "M3", 66500}
+   showValue(o)
+}
+```
+
+### 8.2 接口嵌套接口
+
+一个接口可以包含一个或多个其他的接口，这相当于直接将这些内嵌接口的方法列举在外层接口中一样。
+
+比如接口 `File` 包含了 `ReadWrite` 和 `Lock` 的所有方法，它还额外有一个 `Close()` 方法。
+
+```go
+type ReadWrite interface {
+   Read(b Buffer) bool
+   Write(b Buffer) bool
+}
+
+type Lock interface {
+   Lock()
+   Unlock()
+}
+
+type File interface {
+   ReadWrite
+   Lock
+   Close()
+}
+```
+
+### 8.3 类型断言：如何检测和转换接口变量的类型
+
+一个接口类型的变量 `varI` 中可以包含任何类型的值，必须有一种方式来检测它的**动态**类型，即运行时在变量中存储的值的实际类型。在执行过程中动态类型可能会有所不同，但是它总是可以分配给接口变量本身的类型。通常我们可以使用**类型断言**来测试在某个时刻 `varI` 是否包含类型 `T` 的值：
+
+```go
+v := varI.(T) // unchecked type assertion
+```
+
+varI 必须是一个接口变量，否则编译器会报错： `invalid type assertion: varI.(T) (non-interface type (type of varI) on left)` 。
+
+**类型断言可能是无效的**，虽然编译器会尽力检查转换是否有效，但是它不可能预见所有的可能性。如果转换在程序运行时失败会导致错误发生。更安全的方式是使用以下形式来进行类型断言：
+
+```go
+if v, ok := varI.(T); ok { // checked type assertion
+   Process(v)
+   return
+}
+// varI is not of type T
+```
+
+如果转换合法， `v` 是 `varI` 转换到类型 `T` 的值， `ok` 会是 `true` ；否则 `v` 是类型 `T` 的零 值， `ok` 是 `false` ，也没有运行时错误发生。
+
+### 8.4 类型判断：type-switch
+
+接口变量的类型也可以使用一种特殊形式的 switch 来检测：type-switch ：
+
+```go
+switch t := areaIntf.(type) {
+case *Square:
+   fmt.Printf("Type Square %T with value %v\n", t, t)
+case *Circle:
+   fmt.Printf("Type Circle %T with value %v\n", t, t)
+case nil:
+   fmt.Printf("nil value: nothing to check?\n")
+default:
+   fmt.Printf("Unexpected type %T\n", t)
+}
+```
+
+变量 `t` 得到了 `areaIntf` 的值和类型， 所有 `case` 语句中列举的类型（ `nil` 除外）都必须实现对应的接口（在上例中即 `Shaper` ），如果被检测类型没有在 `case` 语句列举的类型中，就会执行 `default` 语句。
+
+可以用 `type-switch` 进行运行时类型分析，但是在 type-switch **不允许有 fallthrough** 。
+
+如果仅仅是测试变量的类型，不用它的值，那么就可以不需要赋值语句，比如：
+
+```go
+switch areaIntf.(type) {
+	case *Square:
+		// TODO
+	case *Circle:
+		// TODO
+	default:
+		// TODO
+}
+```
+
+下面的代码片段展示了一个类型分类函数，它有一个可变长度参数，可以是任意类型的数组，它会根据数组元素的实际类型执行不同的动作：
+
+```
+func classifier(items ...interface{}) {
+   for i, x := range items {
+      switch x.(type) {
+      case bool:
+         fmt.Printf("Param #%d is a bool\n", i)
+      case float64:
+         fmt.Printf("Param #%d is a float64\n", i)
+      case int, int64:
+         fmt.Printf("Param #%d is a int\n", i)
+      case nil:
+         fmt.Printf("Param #%d is a nil\n", i)
+      case string:
+         fmt.Printf("Param #%d is a string\n", i)
+      default:
+         fmt.Printf("Param #%d is unknown\n", i)
+      }
+   }
+}
+```
+
+可以这样调用此方法： `classifier(13, -14.3, "BELGIUM", complex(1, 2), nil, false)` 。
+
+在处理来自于外部的、类型未知的数据时，比如解析诸如 JSON 或 XML 编码的数据，类型测试和转换会非常有用。
+
+### 8.5 测试一个值是否实现了某个接口
+
+这是类型断言中的一个特例：假定 `v` 是一个值，然后我们想测试它是否实现了 `Stringer` 接口，可以 这样做：
+
+```go
+type Stringer interface{
+    String() string
+}
+if sv, ok := v.(Stringer); ok{
+    fmt.Printf("v implements String(): %s\n", sv.String()) // note: sv, not v
+}
+```
+
+Print 函数就是如此检测类型是否可以打印自身的。
+
+接口是一种契约，实现类型必须满足它，它描述了类型的行为，规定类型可以做什么。
+
+接口彻底将类型能做什么，以及如何做分离开来，使得相同接口的变量在不同的时刻表现出不同的行为，这就是多态的本质。
+
+编写参数是接口变量的函数，这使得它们更具有一般性。
+
+使用接口使代码更具有普适性。
+
+### 8.6 使用方法集与接口
+
+作用于变量上的方法实际上是不区分变量到底是**指针**还是**值**的。
+
+当碰到接口类型值时，这会变得有点复杂，原因是接口变量中存储的具体值是不可寻址的，如果**使用不当编译器会给出错误**。考虑下面的程序：
+
+```go
+package main
+
+import (
+   "fmt"
+)
+
+type List []int
+
+func (l List) Len() int {
+   return len(l)
+}
+
+func (l *List) Append(val int) {
+   *l = append(*l, val)
+}
+
+type Appender interface {
+   Append(int)
+}
+
+func CountInto(a Appender, start, end int) {
+   for i := start; i <= end; i++ {
+      a.Append(i)
+   }
+}
+
+type Lener interface {
+   Len() int
+}
+
+func LongEnough(l Lener) bool {
+   return l.Len()*10 > 42
+}
+
+func main() {
+   // A bare value
+   var lst List
+   // compiler error:
+   // cannot use lst (type List) as type Appender in argument to CountInto:
+   // List does not implement Appender (Append method has pointer receiver)
+   // CountInto(lst, 1, 10)
+   if LongEnough(lst) { // VALID:Identical receiver type
+      fmt.Printf("- lst is long enough\n")
+   }
+
+   // A pointer value
+   plst := new(List)
+   CountInto(plst, 1, 10) //VALID:Identical receiver type
+   if LongEnough(plst) {
+      // VALID: a *List can be dereferenced for the receiver
+      fmt.Printf("- plst is long enough\n")
+   }
+}
+```
+
+在 `lst` 上调用 `CountInto` 时会导致一个编译器错误，因为 `CountInto` 需要一个 `Appender` ，而它的方法 `Append` 只定义在指针上。 在 `lst` 上调用 `LongEnough` 是可以的因为 ‘Len’ 定义在值上。
+
+在 `plst` 上调用 `CountInto` 是可以的，因为 `CountInto` 需要一个 `Appender` ，并且它的方法 `Append` 定义在指针上。 在 `plst` 上调用 `LongEnough` 也是可以的，因为指针会被自动解引用。
+
+总结：
+
+在接口上调用方法时，必须有和方法定义时相同的接收者类型或者是可以从具体类型 P 直接可以辨识的：
+
+- 指针方法可以通过指针调用 
+- 值方法可以通过值调用 
+- 接收者是值的方法可以通过指针调用，因为指针会首先被解引用 
+- 接收者是指针的方法不可以通过值调用，因为存储在接口中的值没有地址
+
+将一个值赋值给一个接口时，编译器会确保所有可能的接口方法都可以在此值上被调用，因此不正确的赋值在编译期 就会失败。
+
+Go 语言规范定义了接口方法集的调用规则：
+
+- 类型 T 的可调用方法集包含接受者为 T 或 T 的所有方法集 
+- 类型 T 的可调用方法集包含接受者为 T 的所有方法 
+- 类型 T 的可调用方法集不包含接受者为 *T 的方法
+
+### 8.7 第一个例子：使用 Sorter 接口排序
+
+一个很好的例子是来自标准库的 `sort` 包，要对一组数字或字符串排序，只需要实现三个方法：反映元素个数的 `Len()` 方法、比较第 i 和 j 个元素的 `Less(i, j)` 方法以及交换第 i 和 j 个元素的 `Swap(i, j)` 方法。
+
+排序函数的算法只会使用到这三个方法（可以使用任何排序算法来实现，此处我们使用冒泡排序）：
+
+```go
+func Sort(data Sorter) {
+   for pass := 1; pass < data.Len(); pass++ {
+      for i := 0; i < data.Len()-pass; i++ {
+         if data.Less(i+1, i) {
+            data.Swap(i, i+1)
+         }
+      }
+   }
+}
+```
+
+Sort 函数接收一个接口类型参数： `Sorter` ，它声明了这些方法：
+
+```go
+type Sorter interface {
+   Len() int
+   Less(i, j int) bool
+   Swap(i, j int)
+}
+```
+
+参数中的 `int` 是待排序序列长度的类型，而不是说要排序的对象一定要是一组 `int` 。 `i` 和 `j` 表示元素的整型索引，长度也是整型的。
+
+现在如果我们想对一个 `int` 数组进行排序，所有必须做的事情就是：为数组定一个类型并在它上面实现 `Sorter` 接口的方法：
+
+```go
+type IntArray []int
+func (p IntArray) Len() int { return len(p) }
+func (p IntArray) Less(i, j int) bool { return p[i] < p[j] }
+func (p IntArray) Swap(i, j int) { p[i], p[j] = p[j], p[i] }
+```
+
+下面是调用排序函数的一个具体例子：
+
+```go
+ data := []int{74, 59, 238, -784, 9845, 959, 905, 0, 0, 42, 7586, -5467984, 7586}
+a := sort.IntArray(data) //conversion to type IntArray from package sort
+sort.Sort(a)
+```
+
+完整的、可运行的代码可以在 `sort.go` 和 `sortmain.go` 里找到。
+
+同样的原理，排序函数可以用于一个浮点型数组，一个字符串数组，或者一个表示每周各天的结构体 `dayArray` .
+
+```go
+package sort
+
+type Sorter interface {
+   Len() int
+   Less(i, j int) bool
+   Swap(i, j int)
+}
+
+func Sort(data Sorter) {
+   for pass := 1; pass < data.Len(); pass++ {
+      for i := 0; i < data.Len()-pass; i++ {
+         if data.Less(i+1, i) {
+            data.Swap(i, i+1)
+         }
+      }
+   }
+}
+
+func IsSorted(data Sorter) bool {
+   n := data.Len()
+   for i := n - 1; i > 0; i-- {
+      if data.Less(i, i-1) {
+         return false
+      }
+   }
+   return true
+}
+
+// Convenience types for common cases
+type IntArray []int
+
+func (p IntArray) Len() int           { return len(p) }
+func (p IntArray) Less(i, j int) bool { return p[i] < p[j] }
+func (p IntArray) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
+
+type StringArray []string
+
+func (p StringArray) Len() int           { return len(p) }
+func (p StringArray) Less(i, j int) bool { return p[i] < p[j] }
+func (p StringArray) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
+
+// Convenience wrappers for common cases
+func SortInts(a []int)       { Sort(IntArray(a)) }
+func SortStrings(a []string) { Sort(StringArray(a)) }
+
+func IntsAreSorted(a []int) bool       { return IsSorted(IntArray(a)) }
+func StringsAreSorted(a []string) bool { return IsSorted(StringArray(a)) }
+```
+
+`panic("fail")` 用于停止处于在非正常情况下的程序，当然也可以先打印一条信息，然后调 用 `os.Exit(1)` 来停止程序。
+
+上面的例子帮助我们进一步了解了接口的意义和使用方式。对于基本类型的排序，标准库已经提供了相关的排序函数，所以不需要我们再重复造轮子了。对于一般性的排序， sort 包定义了一个接口：
+
+```go
+type Interface interface{
+    Len() int
+    Less(i, j int) bool
+    Swap(i, j int)
+}
+```
+
+这个接口总结了需要用于排序的抽象方法，函数 `Sort(data Interface)` 用来对此类对象进行排序，可以用它们来实现对其他数据（非基本类型）进行排序。在上面的例子中，我们也是这么做的，不仅可以对 `int` 和 `string` 序列进行排序，也可以对用户自定义类型 `dayArray` 进行排序。
+
+### 8.8 第二个例子：读和写
+
+读和写是软件中很普遍的行为，提起它们会立即想到读写文件、缓存（比如字节或字符串切片）、标准输入输出、标准错误以及网络连接、管道等等，或者读写我们的自定义类型。为了让代码尽可能通用，Go 采取了一致的方式来读写数据。
+
+`io` 包提供了用于读和写的接口 `io.Reader` 和 `io.Writer` ：
+
+```go
+type Reader interface{
+    Read(p []byte) (n int, err error)
+}
+type Writer interface{
+    Write(p []byte) (n int, err error)
+}
+```
+
+只要类型实现了读写接口，提供 `Read()` 和 `Write()` 方法，就可以从它读取数据，或向它写入数据。
+
+一个对象要是可读的，它必须实现 `io.Reader` 接口，这个接口只有一个签名是 `Read(p []byte) (n int, err error)` 的方法，它从调用它的对象上读取数据，并把读到的数据放入参数中的字节切片中，然后返回读取的字节数和一个`error` 对象，如果没有错误发生返回 ‘`nil`’，如果已经到达输入的尾端，会返回 `io.EOF("EOF")` ，如果读取的过程中发生了错误，就会返回具体的错误信息。
+
+类似地，一个对象要是可写的，它必须实现 `io.Writer` 接口，这个接口也只有一个签名是 `Write(p []byte) (n int, err error)` 的方法，它将指定字节切片中的数据写入调用它的对象里，然后返回实际写入的字节数一个 `error` 对象（如果没有错误发生就是 nil ）。
+
+io 包里的 Readers 和 Writers 都是不带缓冲的， bufio 包里提供了对应的带缓冲的操作，在读写 UTF-8 编码的文本文件时它们尤其有用。
+
+### 8.9 空接口
+
+#### 8.9.1 概念
+
+空接口或者最小接口 不包含任何方法，它对实现不做任何要求：
+
+```go
+type Any interface{}
+```
+
+任何其他类型都实现了空接口（它不仅仅像 Java/C# 中 Object 引用类型）， `any` 或 `Any` 是空接口一 个很好的别名或缩写。
+
+空接口类似 Java/C# 中所有类的基类： Object 类，二者的目标也很相近。 
+
+可以给一个空接口类型的变量 `var val interface {}` 赋任何类型的值。
+
+```go
+package main
+
+import "fmt"
+
+var i = 5
+var str = "ABC"
+
+type Person struct {
+	name string
+	age  int
+}
+
+type Any interface{}
+
+func main() {
+	var val Any
+	val = 5
+	fmt.Printf("val has the value: %v\n", val)
+	val = str
+	fmt.Printf("val has the value: %v\n", val)
+	pers1 := new(Person)
+	pers1.name = "Rob Pike"
+	pers1.age = 55
+	val = pers1
+	fmt.Printf("val has the value: %v\n", val)
+	switch t := val.(type) {
+	case int:
+		fmt.Printf("Type int %T\n", t)
+	case string:
+		fmt.Printf("Type string %T\n", t)
+	case bool:
+		fmt.Printf("Type boolean %T\n", t)
+	case *Person:
+		fmt.Printf("Type pointer to Person %T\n", t)
+	default:
+		fmt.Printf("Unexpected type %T", t)
+	}
+}
+```
+
+在上面的例子中，接口变量 `val` 被依次赋予一个 `int` ， `string` 和 `Person` 实例的值，然后使用 `type-switch` 来测试它的实际类型。每个 `interface {}` 变量在内存中占据两个字长：一个用来存储它包含的类型，另一个用来存储它包含的数据或者指向数据的指针。
+
+空接口在 type-switch 中联合 lambda 函数的用法：
+
+```go
+package main
+
+import "fmt"
+
+type specialString string
+
+var whatIsThis specialString = "hello"
+
+func TypeSwitch() {
+   testFunc := func(any interface{}) {
+      switch v := any.(type) {
+      case bool:
+         fmt.Printf("any %v is a bool type", v)
+      case int:
+         fmt.Printf("any %v is an int type", v)
+      case float32:
+         fmt.Printf("any %v is a float32 type", v)
+      case string:
+         fmt.Printf("any %v is a string type", v)
+      case specialString:
+         fmt.Printf("any %v is a special String!", v)
+      default:
+         fmt.Println("unknown type!")
+      }
+   }
+   testFunc(whatIsThis)
+}
+func main() {
+   TypeSwitch()
+}
+```
+
+#### 8.9.2 构建通用类型或包含不同类型变量的数组
+
+在 4.6.6 中我们看到了能被搜索和排序的 int 数组、 float 数组以及 string 数组，
+
+那么对于其他类型的数组，通过使用空接口。让我们给空接口定一个别名类型 `Element ： type Element interface{}`
+
+然后定义一个容器类型的结构体 `Vector` ，它包含一个 `Element` 类型元素的**切片**：
+
+```go
+type Vector struct{
+    a []Element
+}
+```
+
+**Vector 里能放任何类型的变量**，因为任何类型都实现了空接口，实际上 **Vector 里放的每个元素可以是不同类型的变量**。我们为它定义一个 **At()** 方法用于返回第 **i** 个元素：
+
+```go
+func (p *Vector) At(i int) Element{
+    return p.a[i]
+}
+```
+
+再写一个 `Set()` 方法用于设置第 i 个元素的值：
+
+```go
+func (p *Vector) Set(i int, e Element){
+    p.a[i] = e
+}
+```
+
+`Vector` 中存储的所有元素都是 `Element` 类型，要得到它们的原始类型（`unboxing`：拆箱）需要用到类型断言。`TODO：The compiler rejects assertions guaranteed to fail`，类型断言总是在运行时才执行，因此它会产生运行时错误。
+
+#### 8.9.3 复制数据切片至空接口切片
+
+假设你有一个 `myType` 类型的数据切片，你想将切片中的数据复制到一个空接口切片中，类似：
+
+```go
+var dataSlice []myType = FuncReturnSlice()
+var interfaceSlice []interface{} = dataSlice
+```
+
+编译时会出错： `cannot use dataSlice (type []myType) as type []interface { } in assignment 。`
+
+原因是它们俩在内存中的布局是不一样的
+
+必须使用 for-range 语句来一个一个显式地复制：
+
+```go
+var dataSlice []myType = FuncReturnSlice()
+var interfaceSlice []interface{} = make([]interface{}, len(dataSlice))
+for i, d := range dataSlice{
+	interfaceSlice[i] = d
+}
+```
+
+#### 8.9.4 通用类型的节点数据结构
+
+使用空接口作为数据字段的类型，这样我们就能写出通用的代码。下面是实现一个二叉树的部分代码：
+
+通用定义、用于创建空节点的 NewNode 方法，及设置数据的 SetData 方法
+
+```go
+package main
+
+import "fmt"
+
+type Node struct {
+   le   *Node
+   data interface{}
+   ri   *Node
+}
+
+func NewNode(left, right *Node) *Node {
+   return &Node{left, nil, right}
+}
+
+func (n *Node) SetData(data interface{}) {
+   n.data = data
+}
+func main() {
+   root := NewNode(nil, nil)
+   root.SetData("root node")
+   // make child (leaf) nodes:
+   a := NewNode(nil, nil)
+   a.SetData("left node")
+   b := NewNode(nil, nil)
+   b.SetData("right node")
+   root.le = a
+   root.ri = b
+   fmt.Printf("%v\n", root) // Output: &{0x125275f0 root node 0x125275e0}
+}
+```
+
+data 为通用类型
+
+#### 8.9.5 接口到接口
+
+一个接口的值可以赋值给另一个接口变量，只要底层类型实现了必要的方法。这个转换是在运行时进行检查的，转换失败会导致一个运行时错误：这是 ‘Go’ 语言动态的一面，可以拿它和 Ruby 和 Python 这些动态语言相比较。
+
+假设有以下代码：
+
+```go
+var ai AbsInterface // declares method Abs()
+type SqrInterface interface {
+   Sqr() float
+}
+
+var si SqrInterface
+pp := new(Point) // say *Point implements Abs, Sqr
+var empty interface{}
+```
+
+那么下面的语句和类型断言是合法的：
+
+```go
+empty = pp // everything satisfies empty
+ai = empty.(AbsInterface) // underlying value pp implements Abs()
+// (runtime failure otherwise)
+si = ai.(SqrInterface) // *Point has Sqr() even though AbsInterface doesn’t
+empty = si // *Point implements empty set
+// Note: statically checkable so type assertion not necessary.
+```
+
+下面是函数调用的一个例子：
+
+```go
+type myPrintInterface interface{
+	print()
+}
+func f3(x myInterface){
+	x.(myPrintInterface).print() //  type assertion to myPrintInterface
+}
+```
+
+x 转换为 `myPrintInterface` 类型是完全动态的：只要 x 的底层类型（动态类型）定义了 print 方法 这个调用就可以正常运行。
+
+### 8.10 反射包
+
+#### 8.10.1 方法和类型的反射
+
+反射是用程序检查其所拥有的结构，尤其是类型的一种能力；这是元编程的一种形式。
+
+反射可以在运行时检查类型和变量，例如它的大小、方法和`动态`的调用这些方法。这对于没有源代码的包尤其有用。这是一个强大的工具，除非真得有必要，否则应当避免使用或小心使用。
+
+变量的最基本信息就是类型和值：反射包的 Type 用来表示一个 Go 类型，反射包的 Value 为 Go 值提供了反射接口。
+
+两个简单的函数， `reflect.TypeOf` 和 `reflect.ValueOf` ，返回被检查对象的类型和值。例如，x 被定义为： `var x float64 = 3.4` ，那么 `reflect.TypeOf(x)` 返回 `float64` ， `reflect.ValueOf(x)` 返回  `<float64 Value>` 
+
+实际上，反射是通过检查一个接口的值，变量首先被转换成空接口。这从下面两个函数签名能够很明显的看出来：
+
+```go
+func TypeOf(i interface{}) Type
+func ValueOf(i interface{}) value
+```
+
+接口的值包含一个 type 和 value。
+
+反射可以从接口值反射到对象，也可以从对象反射回接口值。
+
+`reflect.Type` 和 `reflect.Value` 都有许多方法用于检查和操作它们。
+
+一个重要的例子是 Value 有一个 Type 方法返回 `reflect.Value` 的 Type。另一个是 Type 和 Value 都有 Kind 方法返回一个常量来表示类型：`Uint`、`Float64`、`Slice` 等等。同样 Value 有叫做 Int 和 Float 的方法可以获取存储在内部的值（跟 `int64` 和 `float64` 一样）
+
+```go
+const (
+   Invalid Kind = iota
+   Bool
+   Int
+   Int8
+   Int16
+   Int32
+   Int64
+   Uint
+   Uint8
+   Uint16
+   Uint32
+   Uint64
+   Uintptr
+   Float32
+   Float64
+   Complex64
+   Complex128
+   Array
+   Chan
+   Func
+   Interface
+   Map
+   Ptr
+   Slice
+   String
+   Struct
+   UnsafePointer
+)
+```
+
+对于 `float64` 类型的变量 x，如果 `v:=reflect.ValueOf(x)` ，那么 `v.Kind()` 返回 `reflect.Float64` ，所以 下面的表达式是 `true` `v.Kind() == reflect.Float64`
+
+Kind 总是返回底层类型：
+
+```go
+type MyInt int
+var m MyInt = 6
+v := reflect.ValueOf(m)
+```
+
+方法 `v.Kind()` 返回 `reflect.Int` 。
+
+变量 v 的 `Interface()` 方法可以得到还原（接口）值，所以可以这样打印 v 的值： `fmt.Println(v.Interface())`
+
+```go
+// blog: Laws of Reflection
+package main
+
+import (
+   "fmt"
+   "reflect"
+)
+
+func main() {
+   var x float64 = 3.4
+   fmt.Println("type:", reflect.TypeOf(x))
+   v := reflect.ValueOf(x)
+   fmt.Println("value:", v)
+   fmt.Println("type:", v.Type())
+   fmt.Println("kind:", v.Kind())
+   fmt.Println("value:", v.Float())
+   fmt.Println(v.Interface())
+   fmt.Printf("value is %5.2e\n", v.Interface())
+   y := v.Interface().(float64)
+   fmt.Println(y)
+}
+```
+
+x 是一个 `float64` 类型的值， `reflect.ValueOf(x).Float()` 返回这个 `float64` 类型的实际值；同样的适用于 `Int()`, `Bool()`, `Complex(),` `String()`
+
+#### 8.10.2 通过反射修改(设置)值
+
+假设我们要把 x 的值改为 `3.1415`。Value 有一些方法可以完成 这个任务，但是必须小心使用： `v.SetFloat(3.1415)` 。
+
+这将产生一个错误： `reflect.Value.SetFloat using unaddressable value` 。
+
+为什么会这样呢？问题的原因是 v 不是可设置的（这里并不是说值不可寻址）。是否可设置是 Value 的一个属性，并且不是所有的反射值都有这个属性：可以使用 `CanSet()` 方法测试是否可设置。
+
+```go
+package main
+
+import (
+   "fmt"
+   "reflect"
+)
+
+func main() {
+   var x float64 = 3.4
+   v := reflect.ValueOf(x)
+   // setting a value:d
+   //v.SetFloat(3.1415) // Error: will panic: reflect.Value.SetFloat using unaddressable value
+   fmt.Println("settability of v:", v.CanSet())
+   v = reflect.ValueOf(&x) // Note: take the address of x.
+   fmt.Println("type of v:", v.Type())
+   fmt.Println("settability of v:", v.CanSet())
+   v = v.Elem()
+   fmt.Println("The Elem of v is: ", v)
+   fmt.Println("settability of v:", v.CanSet())
+   v.SetFloat(3.1415) // this works!
+   fmt.Println(v.Interface())
+   fmt.Println(v)
+}
+```
+
+在例子中我们看到 `v.CanSet()` 返回 `false： settability of v: false` 
+
+当 `v := reflect.ValueOf(x)` 函数通过传递一个 **x 拷贝**创建了 v，那么 v 的改变并不能更改原始的 x。
+
+要想 v 的更改能作用到 x，那就必须传递 x 的地址 `v = reflect.ValueOf(&x)` 。 
+
+通过 `Type()` 我们看到 v 现在的类型是 `*float64` 并且仍然是不可设置的。 要想让其可设置我们需要使用 Elem() 函数，这间接的使用指针： `v = v.Elem()` 现在 `v.CanSet()` 返回 true 并且 `v.SetFloat(3.1415)` 设置成功了！
+
+反射中有些内容是需要用地址去改变它的状态的。
+
+#### 8.10.3 反射结构
+
+有些时候需要反射一个结构类型。 `NumField()` 方法返回结构内的字段数量；通过一个 for 循环用索引取得每个字段的值 `Field(i)` 。
+
+我们同样能够调用签名在结构上的方法，例如，使用索引 n 来调用： `Method(n).Call(nil)` 。
+
+```go
+package main
+
+import (
+   "fmt"
+   "reflect"
+)
+
+type NotknownType struct {
+   s1, s2, s3 string
+}
+
+func (n NotknownType) String() string {
+   return n.s1 + " - " + n.s2 + " - " + n.s3
+}
+
+// variable to investigate:
+var secret interface{} = NotknownType{"Ada", "Go", "Oberon"}
+
+func main() {
+   value := reflect.ValueOf(secret) // <main.NotknownType Value> Ada - Go - Oberon
+   typ := reflect.TypeOf(secret)    // main.NotknownType
+   // alternative:
+   //typ := value.Type() // main.NotknownType
+   fmt.Println(typ)
+   knd := value.Kind() // struct
+   fmt.Println(knd)
+
+   // iterate through the fields of the struct:
+   for i := 0; i < value.NumField(); i++ {
+      fmt.Printf("Field %d: %v\n", i, value.Field(i))
+      // error: panic: reflect.Value.SetString using value obtained using unexported field
+      //value.Field(i).SetString("C#")
+   }
+
+   // call the first method, which is String():
+   results := value.Method(0).Call(nil)
+   fmt.Println(results) // [Ada - Go - Oberon]
+}
+```
+
+但是如果尝试更改一个值，会得到一个错误：
+
+```go
+panic: reflect.Value.SetString using value obtained using unexported field
+```
+
+这是因为结构中只有被导出字段（首字母大写）才是可设置的；来看下面的例子：
+
+```go
+package main
+
+import (
+   "fmt"
+   "reflect"
+)
+
+type T struct {
+   A int
+   B string
+}
+
+func main() {
+   t := T{23, "skidoo"}
+   s := reflect.ValueOf(&t).Elem()
+   typeOfT := s.Type()
+   for i := 0; i < s.NumField(); i++ {
+      f := s.Field(i)
+      fmt.Printf("%d: %s %s = %v\n", i,
+         typeOfT.Field(i).Name, f.Type(), f.Interface())
+   }
+   s.Field(0).SetInt(77)
+   s.Field(1).SetString("Sunset Strip")
+   fmt.Println("t is now", t)
+}
+```
+
+> 《Go 入门指南》附录 37 深入阐述了反射概念。
+
+### 8.11 Printf 和反射
+
+fmt 包中的 Printf（以及其他格式 化输出函数）都会使用反射来分析它的 `...` 参数。
+
+Printf 的函数声明为：
+
+```go
+func Printf(format string, args ... interface{}) (n int, err error)
+```
+
+Printf 中的 `...` 参数为**空接口类型**。Printf 使用**反射包**来解析这个参数列表。所以，Printf 能够知道它每个参数的类型。因此格式化字符串中只有 `%d` 而**没有** `%u` 和 `%ld`，因为它知道这个参数是 `unsigned` 还是 `long`。 这也是为什么 Print 和 Println 在没有格式字符串的情况下还能正确地输出。
+
+例子：
+
+```go
+package main
+
+import (
+   "os"
+   "strconv"
+)
+
+type Stringer interface {
+   String() string
+}
+
+type Celsius float64
+
+func (c Celsius) String() string {
+   return strconv.FormatFloat(float64(c), 'f', 1, 64) + " °C"
+}
+
+type Day int
+
+var dayName = []string{"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"}
+
+func (day Day) String() string {
+   return dayName[day]
+}
+
+func print(args ...interface{}) {
+   for i, arg := range args {
+      if i > 0 {
+         os.Stdout.WriteString(" ")
+      }
+      switch a := arg.(type) {
+      // type switch
+      case Stringer:
+         os.Stdout.WriteString(a.String())
+      case int:
+         os.Stdout.WriteString(strconv.Itoa(a))
+      case string:
+         os.Stdout.WriteString(a)
+      // more types
+      default:
+         os.Stdout.WriteString("???")
+      }
+   }
+}
+
+func main() {
+   print(Day(1), "was", Celsius(18.36)) // Tuesday was 18.4 °C
+}
+```
+
+> 在 12.8 节中我们将阐释 fmt.Fprintf() 是怎么运用同样的反射原则的。
+
+### 8.12 接口与动态类型
+
+#### 8.12.1 Go 的动态类型
+
+在经典的面向对象语言（像 C++，Java 和 C#）中数据和方法被封装为 类 的概念：类包含它们两者，并且不能剥离。
+
+Go 没有类：数据（结构体或更一般的类型）和方法是一种松耦合的正交关系。
+
+Go 中的接口跟 Java/C# 类似：都是必须提供一个指定方法集的实现。但是更加灵活通用：任何提供了接口方法实现代码的类型都隐式地实现了该接口，而不用显式地声明。
+
+Go 是唯一结合了接口值，静态类型检查（是否该类型实现了某个接口），运行时动态转换的语言，并且不需要显式地声明类型是否满足某个接口。该特性允许我们在不改变已有的代码的情况下定义和使用新接口。
+
+接收一个（或多个）接口类型作为参数的函数，其实参可以是任何实现了该接口的类型。 `实现了某个接口的类型可以被传给任何以此接口为参数的函数` 。
+
+这在程序 `duck_dance.go` 中得以阐明，函数 `DuckDance` 接受一个 `IDuck` 接口类型变量。仅当 `DuckDance` 被实现了 `IDuck` 接口的类型调用时程序才能编译通过。
+
+```go
+package main
+
+import "fmt"
+
+type IDuck interface {
+   Quack()
+   Walk()
+}
+
+func DuckDance(duck IDuck) {
+   for i := 1; i <= 3; i++ {
+      duck.Quack()
+      duck.Walk()
+   }
+}
+
+type Bird struct {
+   // ...
+}
+
+func (b *Bird) Quack() {
+   fmt.Println("I am quacking!")
+}
+
+func (b *Bird) Walk() {
+   fmt.Println("I am walking!")
+}
+
+func main() {
+   b := new(Bird)
+   DuckDance(b)
+}
+```
+
+如果 `Bird` 没有实现 `Walk()` （把它注释掉），会得到一个编译错误：
+
+```
+cannot use b (type *Bird) as type IDuck in function argument:
+*Bird does not implement IDuck (missing Walk method)
+```
+
+如果对 cat 调用函数 DuckDance() ，Go 会提示编译错误，但是 Python 和 Ruby 会以运行时错误结束。
+
+#### 8.12.2 动态方法调用 
+
+Go 的实现与此相反，通常需要编译器静态检查的支持：当变量被赋值给一个接口类型的变量时，编译器会检查其是否 实现了该接口的所有函数。如果方法调用作用于像 `interface{}` 这样的“泛型”上，你可以通过类型断言（来检查变量是否实现了相应接口。
+
+#### 8.12.3 接口的提取
+
+`提取接口`是非常有用的设计模式，可以减少需要的类型和方法数量，而且不需要像传统的基于类的面向对象语言那样维护整个的类层次结构。
+
+#### 8.12.4 显式地指明类型实现了某个接口
+
+如果你希望满足某个接口的类型显式地声明它们实现了这个接口，你可以向接口的方法集中添加一个具有描述性名字的方法。例如：
+
+```go
+type Fooer interfacce{
+	Foo()
+	ImplementsFooer()
+}
+```
+
+类型 Bar 必须实现 `ImplementsFooer` 方法来满足 `Footer` 接口，以清楚地记录这个事实。
+
+```go
+type Bar struct{}
+func (b Bar) ImplementsFooer(){}
+func (b Bar) Foo(){}
+```
+
+#### 8.12.5 空接口和函数重载
+
+在 Go 语言中函数重载可以用可变参数 ...T 作为函数最后一个参数来实现。如果我们把 T 换为空接口，那么可以知道任何类型的变量都是满足 T (空接口）类型的，这样就允许我们传递任何数量任何类型的参数给函数，即重载的实际含义。
+
+函数 `fmt.Printf` 就是这样做的：
+
+```go
+fmt.Printf(format string, a ...interface{}) (n int, errno error)
+```
+
+这个函数通过枚举 slice 类型的实参动态确定所有参数的类型。并查看每个类型是否实现了 String() 方法，如果是就用于产生输出信息。我们可以回到 11.10 节查看这些细节。
+
+#### 8.12.6 接口的继承
+
+当一个类型包含（内嵌）另一个类型（实现了一个或多个接口）的指针时，这个类型就可以使用（另一个类型）所有的接口方法。
+
+例如：
+
+```go
+type Task struct{
+	Command string
+	*log.Logger
+}
+```
+
+这个类型的工厂方法像这样：
+
+```go
+func NewTask(command string, logger *log.Logger) *Task{
+	return &Task(command, logger)
+}
+```
+
+当 `log.Logger` 实现了 Log() 方法后，Task 的实例 task 就可以调用该方法：
+
+```go
+task.Log()
+```
+
+类型可以通过继承多个接口来提供像 多重继承 一样的特性：
+
+```go
+type ReaderWriter struct{
+	*io.Reader
+	*io.Writer
+}
+```
+
+上面概述的原理被应用于整个 Go 包，多态用得越多，代码就相对越少（参见 12.8 节）。这被认为是 Go 编程中 的重要的最佳实践。
+
+### 8.13 总结：Go 中的面向对象
+
+- 封装（数据隐藏）：和别的 OO 语言有 4 个或更多的访问层次相比，Go 把它简化为了 2 层（参见 4.2 节 的可见性规则）: 
+  1. 包范围内的：通过标识符**首字母小写**，**对象**只在它所在的**包内可见** 
+  2. 可导出的：通过标识符**首字母大写**，**对象**对所在**包以外也可见**
+
+- 继承：用组合实现：内嵌一个（或多个）包含想要的行为（字段和方法）的类型；多重继承可以通过内嵌多个类型实现
+- 多态：用接口实现：某个类型的实例可以赋给它所实现的任意接口类型的变量。类型和接口是松耦合的，并且多重继承可以通过实现多个接口实现。Go 接口不是 Java 和 C# 接口的变体，而且：接口间是不相关的，并且是大规模编程和可适应的演进型设计的关键。
+
+### 8.14 结构体、集合和高阶函数
+
+通常你在应用中定义了一个结构体，那么你也可能需要这个结构体的（指针）对象集合，比如：
+
+```go
+type Any interface{}
+type Car struct{
+	Model string
+	Manufacturer string
+	BuildYear int
+}
+type Cars []*Car
+```
+
+在定义所需功能时我们可以利用**函数可以作为（其它函数的）参数**的事实来使用高阶函数，例如：
+
+1）定义一个通用的 `Process()` 函数，它接收一个作用于每一辆 car 的 f 函数作参数：
+
+```go
+// Process all cars with the given function f
+func (cs Cars) Process( f func(car *Car) ){
+    for _, c := range cs{
+        f(c)
+    }
+}
+```
+
+2）在上面的基础上，实现一个查找函数来获取子集合，并在 `Process()` 中传入一个闭包执行（这样就可以访问局部切片 `cars` ）：
+
+```go
+// Find all cars matching a given criteria
+func (cs Cars) FindAll (f func(car *Car) bool) Cars{
+    cars := make([]*Car, 0)
+    cs.Process(func(c *Car){
+        if f(c){
+            cars = append(cars, c)
+        }
+    })
+    return cars
+}
+```
+
+3）实现 Map 功能，产出除 car 对象以外的东西：
+
+```go
+// Process cars and create new data.
+func (cs Cars)Map(f func(car *Car) Any) []Any{
+    result := make([]Any, 0)
+    ix := 0
+    cs.Process(func(c *Car){
+        result[ix] = f(c)
+        ix++
+    })
+    return result
+}
+```
+
+现在我们可以定义下面这样的具体查询：
+
+```go
+allNewBMWs := allCars.findAll(func(car *Car) bool {
+	return (car,Manufacturer == "BMW") && (car.BuildYear > 2010)
+})
+```
+
+4）我们也可以根据入参返回不同的函数。也许我们想根据不同的厂商添加汽车到不同的集合，但是这可能会是多变的。所以我们可以定义一个函数来产生特定的添加函数和 map 集：
+
+```go
+func MakeSortedAppender(manufacturers []string) (func(car *Car), map[string]Cars) {
+   // Prepare maps of sorted cars.
+   sortedCars := make(map[string]Cars)
+   for _, m := range manufacturers {
+      sortedCars[m] = make([]*Car, 0)
+   }
+   sortedCars["Default"] = make([]*Car, 0)
+   // Prepare appender function:
+   appender := func (c *Car) {
+      if _, ok := sortedCars[c.Manufacturer]; ok {
+         sortedCars[c.Manufacturer] = append(sortedCars[c.Manufacturer], c)
+      } else {
+         sortedCars["Default"] = append(sortedCars["Default"], c)
+      }
+   }
+   return appender, sortedCars
+}
+```
+
+现在我们可以用它把汽车分类为独立的集合，像这样：
+
+```go
+manufacturers := []string{“Ford”, “Aston Martin”, “Land Rover”, “BMW”, “Jaguar”}
+sortedAppender, sortedCars := MakeSortedAppender(manufacturers)
+allUnsortedCars.Process(sortedAppender)
+BMWCount := len(sortedCars[“BMW”])
+```
+
+```go
+// cars.go
+package main
+import (
+"fmt"
+)
+type Any interface{}
+type Car struct {
+   Model        string
+   Manufacturer string
+   BuildYear    int
+   // ...
+}
+type Cars []*Car
+
+func main() {
+   // make some cars:
+   ford := &Car{"Fiesta", "Ford", 2008}
+   bmw := &Car{"XL 450", "BMW", 2011}
+   merc := &Car{"D600", "Mercedes", 2009}
+   bmw2 := &Car{"X 800", "BMW", 2008}
+   // query:
+   allCars := Cars([]*Car{ford, bmw, merc, bmw2})
+   allNewBMWs := allCars.FindAll(func(car *Car) bool {
+      return (car.Manufacturer == "BMW") && (car.BuildYear > 2010)
+   })
+   fmt.Println("AllCars: ", allCars)
+   fmt.Println("New BMWs: ", allNewBMWs)
+   //
+   manufacturers := []string{"Ford", "Aston Martin", "Land Rover", "BMW", "Jaguar"}
+   sortedAppender, sortedCars := MakeSortedAppender(manufacturers)
+   allCars.Process(sortedAppender)
+   fmt.Println("Map sortedCars: ", sortedCars)
+   BMWCount := len(sortedCars["BMW"])
+   fmt.Println("We have ", BMWCount, " BMWs")
+}
+
+// Process all cars with the given function f:
+func (cs Cars) Process(f func(car *Car)) {
+   for _, c := range cs {
+      f(c)
+   }
+}
+
+// Find all cars matching a given criteria.
+func (cs Cars) FindAll(f func(car *Car) bool) Cars {
+   cars := make([]*Car, 0)
+
+   cs.Process(func(c *Car) {
+      if f(c) {
+         cars = append(cars, c)
+      }
+   })
+   return cars
+}
+
+// Process cars and create new data.
+func (cs Cars) Map(f func(car *Car) Any) []Any {
+   result := make([]Any, len(cs))
+   ix := 0
+   cs.Process(func(c *Car) {
+      result[ix] = f(c)
+      ix++
+   })
+   return result
+}
+
+func MakeSortedAppender(manufacturers []string) (func(car *Car), map[string]Cars) {
+   // Prepare maps of sorted cars.
+   sortedCars := make(map[string]Cars)
+
+   for _, m := range manufacturers {
+      sortedCars[m] = make([]*Car, 0)
+   }
+   sortedCars["Default"] = make([]*Car, 0)
+
+   // Prepare appender function:
+   appender := func(c *Car) {
+      if _, ok := sortedCars[c.Manufacturer]; ok {
+         sortedCars[c.Manufacturer] = append(sortedCars[c.Manufacturer], c)
+      } else {
+         sortedCars["Default"] = append(sortedCars["Default"], c)
+      }
+   }
+   return appender, sortedCars
+}
+```
+
+## 9. 读写数据
+
+### 9.1 读取用户的输入
+
+Go 中读取用户的输入是通过 键盘和标准输入 `os.Stdin` 进行获取，最简单的使用就是利用 `fmt` 包提供的 `Scan` 和 `Sscan` 开头的函数。 
+
+```go
+// 从控制台读取输入:
+package main
+
+import "fmt"
+
+var (
+   firstName, lastName, s string
+   i                      int
+   f                      float32
+   input                  = "56.12 / 5212 / Go"
+   format                 = "%f / %d / %s"
+)
+
+func main() {
+   fmt.Println("Please enter your full name: ")
+   fmt.Scanln(&firstName, &lastName)
+   // fmt.Scanf("%s %s", &firstName, &lastName)
+   fmt.Printf("Hi %s %s!\n", firstName, lastName) // Hi Chris Naegels
+   fmt.Sscanf(input, format, &f, &i, &s)
+   fmt.Println("From the string we read: ", f, i, s)
+   // 输出结果: From the string we read: 56.12 5212 Go
+}
+```
+
+`Scanln` 扫描来自标准输入的文本，将空格分隔的值依次存放到后续的参数内，直到碰到换行。 `Scanf` 与其类似，除了 `Scanf` 的第一个参数用作格式字符串，用来决定如何读取。 `Sscan` 和以 `Sscan` 开头的函数则是从字符串读取，除此之外，与 `Scanf` 相同。如果这些函数读取到的结果与您预想的不同，您可以检查成功读入数据的个数和返回的错误。
+
+也可以使用 `bufio` 包提供的缓冲读取（buffered reader）来读取数据
+
+```go
+package main
+
+import (
+   "fmt"
+   "bufio"
+   "os"
+)
+
+var inputReader *bufio.Reader
+var input string
+var err error
+
+func main() {
+    inputReader = bufio.NewReader(os.Stdin)
+   fmt.Println("Please enter some input: ")
+   input, err = inputReader.ReadString('\n')
+   if err == nil {
+      fmt.Printf("The input was: %s\n", input)
+   }
+}
+```
+
+`inputReader` 是一个指向 `bufio.Reader` 的指针。 `inputReader = bufio.NewReader(os.Stdin)` 这行代码，将会创建一个读取器，并将其与标准输入绑定。
+
+`bufio.NewReader()` 构造函数的签名为： `func NewReader(rd io.Reader) *Reader`
+
+该函数的实参可以是满足 `io.Reader` 接口的任意对象（任意包含有适当的 `Read()` 方法的对象，请参考章节 11.8），函数返回一个新的带缓冲的 `io.Reader` 对象，它将从指定读取器（例如 `os.Stdin` ）读取内容。
+
+返回的读取器对象提供一个方法 `ReadString(delim byte)` ，该方法从输入中读取内容，直到碰到 `delim` 指定的字符，然后将读取到的内容连同 `delim` 字符一起放到缓冲区。
+
+`ReadString` 返回读取到的字符串，如果碰到错误则返回 `nil` 。如果它一直读到文件结束，则返回读取到的字符串和 `io.EOF` 。如果读取过程中没有碰到 `delim` 字符，将返回错误 `err != nil` 。
+
+屏幕是标准输出 `os.Stdout` ； `os.Stderr` 用于显示错误信息，大多数情况下等同于 `os.Stdout` 。
+
+一般情况下，我们会省略变量声明，而使用 `:=` ，例如：
+
+```go
+inputReader := bufio.NewReader(os.Stdin)
+input, err := inputReader.ReadString('\n')
+```
+
+### 9.2 文件读写
+
+#### 9.2.1 读文件
+
+在 Go 语言中，文件使用指向 `os.File` 类型的指针来表示的，也叫做文件句柄。我们在前面章节使用到过标准输入 `os.Stdin` 和标准输出 `os.Stdout` ，他们的类型都是 `*os.File` 。
+
+```go
+package main
+
+import (
+   "bufio"
+   "fmt"
+   "io"
+   "os"
+)
+
+func main() {
+   inputFile, inputError := os.Open("input.dat")
+   if inputError != nil {
+      fmt.Printf("An error occurred on opening the inputfile\n" +
+         "Does the file exist?\n" +
+         "Have you got acces to it?\n")
+      return // exit the function on error
+   }
+   defer inputFile.Close()
+
+   inputReader := bufio.NewReader(inputFile)
+   for {
+      inputString, readerError := inputReader.ReadString('\n')
+      fmt.Printf("The input was: %s", inputString)
+      if readerError == io.EOF {
+         return
+      }
+   }
+}
+```
+
+变量 `inputFile` 是 `*os.File` 类型的。该类型是一个结构，表示一个打开文件的描述符（文件句柄）。然后， 使用 `os` 包里的 Open 函数来打开一个文件。该函数的参数是文件名，类型为 string 。在上面的程序中， 我们以只读模式打开 `input.dat` 文件。
+
+如果文件不存在或者程序没有足够的权限打开这个文件，Open函数会返回一个错误： `inputFile, inputError = os.Open("input.dat")` 。如果文件打开正常，我们就使用 `defer inputFile.Close()` 语句确保在程序退出前关闭该文件。然后，我们使用 `bufio.NewReader` 来获得一个读取器变量。
+
+通过使用 `bufio` 包提供的读取器（写入器也类似），如上面程序所示，我们可以很方便的操作相对高层的 string 对象，而避免了去操作比较底层的字节。
+
+接着，我们在一个无限循环中使用 `ReadString('\n')` 或 `ReadBytes('\n')` 将文件的内容逐行（行结束符 ‘\n’）读取出来。
+
+其他类似函数：
+
+1. 将整个文件的内容读到一个字符串里：
+
+   使用 `io/ioutil` 包里的 `ioutil.ReadFile()` 方法，该方法第一个返回值的类型是 `[]byte` ，里面存放读取到的内容，第二个返回值是错误，如果没有错误发生，第二个返回值为 `nil`。请看示例 12.5。类似的，函数 `WriteFile()` 可以将 `[]byte` 的值写入文件。
+
+   ```go
+   package main
+   
+   import (
+      "fmt"
+      "io/ioutil"
+      "os"
+   )
+   
+   func main() {
+      inputFile := "products.txt"
+      outputFile := "products_copy.txt"
+      // 读取文件中的内容，buf 是一个 byte 数组
+      buf, err := ioutil.ReadFile(inputFile)
+      if err != nil {
+         fmt.Fprintf(os.Stderr, "File Error: %s\n", err)
+         // panic(err.Error())
+      }
+      fmt.Printf("%s\n", string(buf))
+      err = ioutil.WriteFile(outputFile, buf, 0644) // oct, not hex
+      if err != nil {
+         panic(err.Error())
+      }
+   }
+   ```
+
+2. 带缓冲的读取
+
+   在很多情况下，文件的内容是不按行划分的，或者干脆就是一个二进制文件。在这种情况下， `ReadString()` 就无法使用了，我们可以使用 `bufio.Reader` 的 `Read()` ，它只接收一个参数：
+
+   ```go
+   buf := make([]byte, 1024)
+   n, err := inputReader.Read(buf)
+   if (n == 0) { break}
+   ```
+
+   变量 n 的值表示读取到的字节数.
+
+3. 按列读取文件中的数据
+
+   如果数据是**按列排列并用空格分隔**的，你可以使用 `fmt` 包提供的以 `FScan` 开头的一系列函数来读取他们。请看以下程序，我们将 3 列的数据分别读入变量 v1、v2 和 v3 内，然后分别把他们添加到切片的尾部。
+
+   ```go
+   package main
+   
+   import (
+      "fmt"
+      "os"
+   )
+   
+   func main() {
+      file, err := os.Open("products2.txt")
+      if err != nil {
+         panic(err)
+      }
+      defer file.Close()
+   
+      var col1, col2, col3 []string
+      for {
+         var v1, v2, v3 string
+         _, err := fmt.Fscanln(file, &v1, &v2, &v3)
+         // scans until newline
+         if err != nil {
+            break
+         }
+         col1 = append(col1, v1)
+         col2 = append(col2, v2)
+         col3 = append(col3, v3)
+      }
+   
+      fmt.Println(col1)
+      fmt.Println(col2)
+      fmt.Println(col3)
+   }
+   ```
+
+   注意： path 包里包含一个子包叫 `filepath` ，这个子包提供了跨平台的函数，用于处理文件名和路径。例如`Base()` 函数用于获得路径中的最后一个元素（不包含后面的分隔符）：
+
+   ```go
+   import "path/filepath"
+   filename := filepath.Base(path)
+   ```
+
+#### 9.2.2 compress 包：读取压缩文件
+
+`compress` 包提供了读取压缩文件的功能，支持的压缩文件格式为：`bzip2`、`flate`、`gzip`、`lzw` 和 `zlib`。
+
+读取一个 gzip 文件：
+
+```go
+package main
+
+import (
+   "fmt"
+   "bufio"
+   "os"
+   "compress/gzip"
+)
+
+func main() {
+   fName := "MyFile.gz"
+   var r *bufio.Reader
+   fi, err := os.Open(fName)
+   if err != nil {
+      fmt.Fprintf(os.Stderr, "%v, Can't open %s: error: %s\n", os.Args[0], fName,
+         err)
+      os.Exit(1)
+   }
+   fz, err := gzip.NewReader(fi)
+   if err != nil {
+      r = bufio.NewReader(fi)
+   } else {
+      r = bufio.NewReader(fz)
+   }
+
+   for {
+      line, err := r.ReadString('\n')
+      if err != nil {
+         fmt.Println("Done reading file")
+         os.Exit(0)
+      }
+      fmt.Println(line)
+   }
+}
+```
+
+#### 9.2.3 写文件
+
+```go
+package main
+
+import (
+   "bufio"
+   "fmt"
+   "os"
+)
+
+func main() {
+   // var outputWriter *bufio.Writer
+   // var outputFile *os.File
+   // var outputError os.Error
+   // var outputString string
+   outputFile, outputError := os.OpenFile("output.dat", os.O_WRONLY|os.O_CREATE, 0666)
+   if outputError != nil {
+      fmt.Printf("An error occurred with file opening or creation\n")
+      return
+   }
+   defer outputFile.Close()
+
+   outputWriter := bufio.NewWriter(outputFile)
+   outputString := "hello world!\n"
+
+   for i := 0; i < 10; i++ {
+      outputWriter.WriteString(outputString)
+   }
+   outputWriter.Flush()
+}
+```
+
+除了文件句柄，我们还需要 `bufio` 的 `Writer` 。我们以只写模式打开文件 `output.dat` ，如果文件不存在则自动创建：
+
+```go
+ outputFile, outputError := os.OpenFile(“output.dat”, os.O_WRONLY|os.O_CREATE, 0666)
+```
+
+可以看到， OpenFile 函数有三个参数：**文件名**、**一个或多个标志**（使用逻辑运算符“**|**”连接），使用的文件权限。
+
+我们通常会用到以下标志：
+
+- os.O_RDONLY ：只读 
+- os.O_WRONLY ：只写 
+- os.O_CREATE ：创建：如果指定文件不存在，就创建该文件。 
+- os.O_TRUNC ：截断：如果指定文件已存在，就将该文件的长度截为0。
+
+在**读文件的时候，文件的权限是被忽略的**，所以在使用 `OpenFile` 时传入的第三个参数可以用0。而在写文件时， 不管是 Unix 还是 Windows，都需要使用 **0666**。
+
+然后，我们创建一个写入器（缓冲区）对象：
+
+```go
+ outputWriter := bufio.NewWriter(outputFile)
+```
+
+接着，使用一个 for 循环，将字符串写入缓冲区，写 10 次： `outputWriter.WriteString(outputString)`
+
+缓冲区的内容紧接着被完全写入文件： `outputWriter.Flush()`
+
+如果写入的东西很简单，我们可以使用 `fmt.Fprintf(outputFile, “Some test data.\n”)` 直接将内容写入文件。 `fmt` 包里的 F 开头的 Print 函数可以直接写入任何 `io.Writer` ，包括文件（请参考章节12.8).
+
+程序 filewrite.go 展示了不使用 fmt.FPrintf 函数，使用其他函数如何写文件：
+
+```go
+package main
+
+import "os"
+
+func main() {
+   os.Stdout.WriteString("hello, world\n")
+   f, _ := os.OpenFile("test", os.O_CREATE|os.O_WRONLY, 0)
+   defer f.Close()
+   f.WriteString("hello, world in a file\n")
+}
+```
+
+使用 `os.Stdout.WriteString(“hello, world\n”)` ，我们可以输出到屏幕。
+
+我们以只写模式创建或打开文件“test”，并且忽略了可能发生的错误： `f, _ := os.OpenFile(“test”, os.O_CREATE|os.O_WRONLY, 0)`
+
+我们不使用缓冲区，直接将内容写入文件： `f.WriteString( )`
+
+### 9.3 文件拷贝
+
+使用 io 包：
+
+```go
+// filecopy.go
+package main
+
+import (
+   "fmt"
+   "io"
+   "os"
+)
+
+func main() {
+   CopyFile("target.txt", "source.txt")
+   fmt.Println("Copy done!")
+}
+
+func CopyFile(dstName, srcName string) (written int64, err error) {
+   src, err := os.Open(srcName)
+   if err != nil {
+      return
+   }
+   defer src.Close()
+
+   dst, err := os.OpenFile(dstName, os.O_WRONLY|os.O_CREATE, 0644)
+   if err != nil {
+      return
+   }
+   defer dst.Close()
+
+   return io.Copy(dst, src)
+}
+```
+
+注意 defer 的使用：当打开目标文件时发生了错误，那么 defer 仍然能够确保 `src.Close()` 执行。如果不 这么做，文件会一直保持打开状态并占用资源。
+
+### 9.4 从命令行读取参数
+
+#### 9.4.1 os 包
+
+os 包中有一个 string 类型的切片变量 `os.Args` ，用来处理一些基本的命令行参数，它在程序启动后读取命令 行输入的参数。来看下面的打招呼程序：
+
+```go
+// os_args.go
+package main
+
+import (
+   "fmt"
+   "os"
+   "strings"
+)
+
+func main() {
+   who := "Alice "
+   if len(os.Args) > 1 {
+      who += strings.Join(os.Args[1:], " ")
+   }
+   fmt.Println("Good Morning", who)
+}
+```
+
+我们在 IDE 或编辑器中直接运行这个程序输出： `Good Morning Alice`
+
+我们在命令行运行 `os_args or ./os_args` 会得到同样的结果。
+
+但是我们在命令行加入参数，像这样： `os_args John Bill Marc Luke` ，将得到这样的输出： `Good Morning Alice John Bill Marc Luke`
+
+这个命令行参数会放置在切片 `os.Args[]` 中（以空格分隔），从索引1开始（ `os.Args[0]` 放的是**程序本身的名字**，在本例中是 `os_args` ）。函数 `strings.Join` 以空格为间隔连接这些参数。
+
+#### 9.4.2 flag 包
+
+flag 包有一个扩展功能用来解析命令行选项。但是通常被用来替换基本常量，例如，在某些情况下我们希望在命令行给常量一些不一样的值。（参看 19 章的项目）
+
+在 flag 包中一个 Flag 被定义成一个含有如下字段的结构体：
+
+```go
+type Flag struct{
+	Name string // name as it appears on command line
+	Usage string // help message
+	Value Value  // value as set
+	DefValue string // default value (as text); for usage message
+}
+```
+
+下面的程序 `echo.go` 模拟了 Unix 的 echo 功能：
+
+```go
+package main
+
+import (
+   "flag" // command line option parser
+   "os"
+)
+
+var NewLine = flag.Bool("n", false, "print newline") // echo -n flag, of type *bool
+
+const (
+   Space   = " "
+   Newline = "\n"
+)
+
+func main() {
+   flag.PrintDefaults()
+   flag.Parse() // Scans the arg list and sets up flags
+   var s string = ""
+   for i := 0; i < flag.NArg(); i++ {
+      if i > 0 {
+         s += " "
+         if *NewLine { // -n is parsed, flag becomes true
+            s += Newline
+         }
+      }
+      s += flag.Arg(i)
+   }
+   os.Stdout.WriteString(s)
+}
+```
+
+`flag.Parse()` 扫描参数列表（或者常量列表）并设置 flag, `flag.Arg(i)` 表示第i个参数。 `Parse()` 之后 `flag.Arg(i)` 全部可用， `flag.Arg(0)` 就是第一个真实的 flag，而不是像 `os.Args(0)` 放置程序的名字。
+
+`flag.Narg()` 返回参数的数量。解析后 flag 或常量就可用了。
+
+`flag.Bool()` 定义了一个默认值是 `false` 的 flag：当在命令行出现了第一个参数（这里是 “n”），flag 被设置成 `true` （NewLine 是 `*bool` 类型）。flag 被解引用到 `*NewLine` ，所以当值是 true 时将添加一个 newline（”\n”）。
+
+`flag.PrintDefaults()` 打印 flag 的使用帮助信息，本例中打印的是：
+
+ `-n=false: print newline`
+
+`flag.VisitAll(fn func(*Flag))` 是另一个有用的功能：按照字典顺序遍历 flag，并且对每个标签调用 fn 
+
+当在命令行（Windows）中执行： echo.exe A B C ，将输出： A B C ；执行 echo.exe -n A B C ，将输出：
+
+```
+A
+B
+C
+```
+
+每个字符的输出都新起一行，每次都在输出的数据前面打印使用帮助信息： `-n=false: print newline` 。
+
+对于 `flag.Bool` 你可以设置布尔型 flag 来测试你的代码，例如定义一个 flag `processedFlag` :
+
+```go
+var processedFlag = flag.Bool(“proc”, false, “nothing processed yet”)
+```
+
+在后面用如下代码来测试：
+
+```
+if *processdFlag{
+	r = process()
+}
+```
+
+要给 flag 定义其它类型，可以使用 `flag.Int()` ， `flag.Float64` ， `flag.String()` 。
+
+### 9.5 用 buffer 读取文件
+
+使用了缓冲读取文件和命令行 flag 解析这两项技术读取文件。如果不加参数，那么你输入什么屏 幕就打印什么。
+
+参数被认为是文件名，如果文件存在的话就打印文件内容到屏幕。命令行执行 cat test 测试输出。
+
+```go
+package main
+
+import (
+   "bufio"
+   "flag"
+   "fmt"
+   "io"
+   "os"
+)
+
+func cat(r *bufio.Reader) {
+   for {
+      buf, err := r.ReadBytes('\n')
+      if err == io.EOF {
+         break
+      }
+      fmt.Fprintf(os.Stdout, "%s", buf)
+   }
+   return
+}
+
+func main() {
+   flag.Parse()
+   if flag.NArg() == 0 {
+      cat(bufio.NewReader(os.Stdin))
+   }
+   for i := 0; i < flag.NArg(); i++ {
+      f, err := os.Open(flag.Arg(i))
+      if err != nil {
+         fmt.Fprintf(os.Stderr, "%s:error reading from %s: %s\n", os.Args[0], flag.Arg(i), err.Error())
+         continue
+      }
+      cat(bufio.NewReader(f))
+   }
+}
+```
+
+### 9.6 用切片读写文件
+
+切片提供了 Go 中处理 I/O 缓冲的标准方式，下面 cat 函数的第二版中，在一个切片缓冲内使用无限 for 循环（直到文件尾部 EOF）读取文件，并写入到标准输出（ os.Stdout ）。
+
+```go
+func cat(f *os.File) {
+   const NBUF = 512
+   var buf [NBUF]byte
+   for {
+      switch nr, err := f.Read(buf[:]); true {
+      case nr < 0:
+         fmt.Fprintf(os.Stderr, "cat: error reading: %s\n", err.Error())
+         os.Exit(1)
+      case nr == 0: // EOF
+         return
+      case nr > 0:
+         if nw, ew := os.Stdout.Write(buf[0:nr]); nw != nr {
+            fmt.Fprintf(os.Stderr, "cat: error writing: %s\n", ew.Error())
+         }
+      }
+   }
+}
+```
+
+下面的代码来自于 `cat2.go` ，使用了 os 包中的 os.file 和 Read 方法； cat2.go 与 cat.go 具有同样的功能。
+
+```go
+package main
+
+import (
+   "flag"
+   "fmt"
+   "os"
+)
+
+func cat(f *os.File) {
+   const NBUF = 512
+   var buf [NBUF]byte
+   for {
+      switch nr, err := f.Read(buf[:]); true {
+      case nr < 0:
+         fmt.Fprintf(os.Stderr, "cat: error reading: %s\n", err.Error())
+         os.Exit(1)
+      case nr == 0: // EOF
+         return
+      case nr > 0:
+         if nw, ew := os.Stdout.Write(buf[0:nr]); nw != nr {
+            fmt.Fprintf(os.Stderr, "cat: error writing: %s\n", ew.Error())
+         }
+      }
+   }
+}
+
+func main() {
+   flag.Parse() // Scans the arg list and sets up flags
+   if flag.NArg() == 0 {
+      cat(os.Stdin)
+   }
+   for i := 0; i < flag.NArg(); i++ {
+      f, err := os.Open(flag.Arg(i))
+      if f == nil {
+         fmt.Fprintf(os.Stderr, "cat: can't open %s: error %s\n", flag.Arg(i), err)
+         os.Exit(1)
+      }
+      cat(f)
+      f.Close()
+   }
+}
+```
+
+### 9.7 用 defer 关闭文件
+
+defer 关键字（参看 6.4）对于在函数结束时关闭打开的文件非常有用，例如下面的代码片段：
+
+```go
+func data(name string) string {
+   f, _ := os.OpenFile(name, os.O_RDONLY, 0)
+   defer f.Close() // idiomatic Go code!
+   contents, _ := ioutil.ReadAll(f)
+   return string(contents)
+}
+```
+
+在函数 return 后执行了 f.Close()
+
+### 9.8 使用接口的实际例子：fmt.Fprintf
+
+```go
+// interfaces being used in the GO-package fmt
+package main
+
+import (
+   "bufio"
+   "fmt"
+   "os"
+)
+
+func main() {
+   // unbuffered
+   fmt.Fprintf(os.Stdout, "%s\n", "hello world! - unbuffered")
+   // buffered: os.Stdout implements io.Writer
+   buf := bufio.NewWriter(os.Stdout)
+   // and now so does buf.
+   fmt.Fprintf(buf, "%s\n", "hello world! - buffered")
+   buf.Flush()
+}
+```
+
+下面是 fmt.Fprintf() 函数的实际签名
+
+```
+ func Fprintf(w io.Writer, format string, a ...interface{}) (n int, err error)
+```
+
+其不是写入一个文件，而是写入一个 io.Writer 接口类型的变量，下面是 Writer 接口在 io 包中的定义：
+
+```go
+type Writer interface{
+	Write(p []byte) (n int, err error)
+}
+```
+
+`fmt.Fprintf()` 依据指定的格式向第一个参数内写入字符串，第一参数必须实现了 `io.Writer` 接口。 `Fprintf()` 能够写入任何类型，只要其实现了 Write 方法，包括 `os.Stdout` ,文件（例如 `os.File`），管道，网络连接，通道等等，同样的也可以使用 `bufio` 包中缓冲写入。`bufio` 包中定义了 `type Writer struct{...}` 。
+
+bufio.Writer 实现了 Write 方法：
+
+```go
+func (b *Writer) Write(p []byte) (nn int, err error)
+```
+
+它还有一个工厂函数：传给它一个 io.Writer 类型的参数，它会返回一个缓冲的 bufio.Writer 类型的 io.Writer :
+
+```
+ func NewWriter(wr io.Writer) (b *Writer)
+```
+
+在缓冲写入的最后千万不要忘了使用 `Flush()` ，否则最后的输出不会被写入。
+
+### 9.9 格式化 JSON 数据
+
+```go
+package main
+
+import (
+   "encoding/json"
+   "fmt"
+   "log"
+   "os"
+)
+
+type Address struct {
+   Type    string
+   City    string
+   Country string
+}
+
+type VCard struct {
+   FirstName string
+   LastName  string
+   Addresses []*Address
+   Remark    string
+}
+
+func main() {
+   pa := &Address{"private", "Aartselaar", "Belgium"}
+   wa := &Address{"work", "Boom", "Belgium"}
+   vc := VCard{"Jan", "Kersschot", []*Address{pa, wa}, "none"}
+   // fmt.Printf("%v: \n", vc) // {Jan Kersschot [0x126d2b80 0x126d2be0] none}:
+   // JSON format:
+   js, _ := json.Marshal(vc)
+   fmt.Printf("JSON format: %s", js)
+   // using an encoder:
+   file, _ := os.OpenFile("vcard.json", os.O_CREATE|os.O_WRONLY, 0666)
+   defer file.Close()
+   enc := json.NewEncoder(file)
+   err := enc.Encode(vc)
+   if err != nil {
+      log.Println("Error in encoding json")
+   }
+}
+```
+
+出于安全考虑，在 web 应用中最好使用 `json.MarshalforHTML()` 函数，其对数据执行HTML转码，所以文本可以被安全地嵌在 HTML `<script>` 标签中。
+`json.NewEncoder()` 的函数签名是 `func NewEncoder(w io.Writer) *Encoder` ，返回的Encoder类型的指针可调用方
+法 `Encode(v interface{})` ，将数据对象 v 的json编码写入 `io.Writer` w 中。
+
+只有验证通过的数据结构才能被编码：
+
+- JSON 对象只支持字符串类型的 key；要编码一个 Go map 类型，map 必须是 map[string]T（T是 json 包中支持的任何类型）
+-  Channel，复杂类型和函数类型不能被编码 
+- 不支持循环数据结构；它将引起序列化进入一个无限循环 
+- 指针可以被编码，实际上是对指针指向的值进行编码（或者指针是 nil）
+
+
+
+### 9.10 XML 数据格式
+
+见《GO入门指南 12.10》
+
+### .11 用 Gob 传输数据
+
+见《GO入门指南 12.11》
+
+### 9.12 Go 中的密码学
+
+见《GO入门指南 12.12》
+
+
+
+## 10. 错误处理与测试
+
+Go 没有像 Java 和 .NET 那样的 try/catch 异常机制：不能执行抛异常操作。但是有一套 `defer-panic-and-recover` 机制。
+
+Go 没有像 Java 和 .NET 那样的 try/catch 异常机制：不能执行抛异常操作。但是有一套 defer-panic-andrecover 机制
+
+Go 是怎么处理普通错误的呢？通过在函数和方法中返回错误对象作为它们的唯一或最后一个返回值——如果返回 nil，则没有错误发生——并且主调（calling）函数总是应该检查收到的错误。
+
+处理错误并且在函数发生错误的地方给用户返回错误信息：照这样处理就算真的出了问题，你的程序也能继续运行并 且通知给用户。 panic and recover 是用来处理真正的异常（无法预测的错误）而不是普通的错误。
+
+库函数通常必须返回某种错误提示给主调（calling）函数。
+
+### 10.1 错误处理
+
+Go 有一个预先定义的 error 接口类型
+
+```go
+type error interface{
+	Error() string
+}
+```
+
+错误值用来表示异常状态；我们可以在 `5.2 节`中看到它的标准用法。处理文件操作的例子可以在 12 章找到；我们将在 15 章看到网络操作的例子。errors 包中有一个 errorString 结构体实现了 error 接口。当程序处于错误状态时可以用 os.Exit(1) 来中止运行。
+
+#### 10.1.1 定义错误
+
+任何时候当你需要一个新的错误类型，都可以用 `errors` （必须先 import）包的 `errors.New` 函数接收合适的错误信息来创建，像下面这样：
+
+```go
+err := errors.New(“math - square root of negative number”)
+```
+
+#### 10.1.2 用 fmt 创建错误对象
+
+通常你想要返回包含错误参数的更有信息量的字符串，例如：可以用 `fmt.Errorf()` 来实现：它和 `fmt.Printf()` 完全一样，接收有一个或多个格式占位符的格式化字符串和相应数量的占位变量。和打印信息不同的是它用信息生成错误对象。
+
+比如在前面的平方根例子中使用：
+
+```go
+if f < 0 {
+	return 0, fmt.Errorf("math: square root of negative number %g", f)
+}
+```
+
+第二个例子：从命令行读取输入时，如果加了 help 标志，我们可以用有用的信息产生一个错误：
+
+```go
+if len(os.Args) > 1 && (os.Args[1] == "-h" || os.Args[1] == "--help") {
+	err = fmt.Errorf("usage: %s infile.txt outfile.txt", filepath.Base(os.Args[0]))
+	return
+}
+```
+
+### 10.2 运行时异常和 panic
+
+当发生像数组下标越界或类型断言失败这样的运行错误时，Go 运行时会触发运行时 panic，伴随着程序的崩溃抛出一个 `runtime.Error` 接口类型的值。这个错误值有个 `RuntimeError()` 方法用于区别普通错误。
+
+panic 可以直接从代码初始化：当错误条件（我们所测试的代码）很严苛且不可恢复，程序不能继续运行时，可以使用 panic 函数产生一个中止程序的运行时错误。 panic 接收一个做任意类型的参数，通常是字符串，在程序死亡时被打印出来。Go 运行时负责中止程序并给出调试信息。在示例 13.2 panic.go 中阐明了它的工作方式：
+
+```go
+package main
+import "fmt"
+func main(){
+	fmt.Println("Starting the program"
+	panic("A severe error occurred: stopping the program!")
+	fmt..Println("Ending the program")
+}
+```
+
+一个检查程序是否被已知用户启动的具体例子：
+
+```go
+var user = os.Getenv("USER")
+func check(){
+	if user == ""{
+		panic("Unknown user: no value for $USER")
+	}
+}
+```
+
+可以在导入包的 init() 函数中检查这些。
+
+当发生错误必须中止程序时， panic 可以用于错误处理模式：
+
+```go
+if err != nil{
+	panic("ERROR occurred:" + err.Error())
+}
+```
+
+Go panicking： 在多层嵌套的函数调用中调用 panic，可以马上中止当前函数的执行，所有的 defer 语句都会保证执行并把控制权交还给接收到 panic 的函数调用者。这样向上冒泡直到最顶层，并执行（每层的） defer，在栈顶处程序崩溃，并在命令行中用传给 panic 的值报告错误情况：这个终止过程就是 panicking。
+
+标准库中有许多包含 Must 前缀的函数，像 `regexp.MustComplie` 和 `template.Must` ；当正则表达式或模板中转入的转换字符串导致错误时，这些函数会 panic。
+
+不能随意地用 panic 中止程序，必须尽力补救错误让程序能继续执行。
+
+### 10.3 从 panic 中恢复（Recover）
+
+正如名字一样，这个（recover）内建函数被用于从 panic 或 错误场景中恢复：让程序可以从 `panicking` 重新获得控制权，停止终止过程进而恢复正常执行。
+
+`recover` 只能在 defer 修饰的函数（参见 6.4 节）中使用：用于取得 `panic` 调用中传递过来的错误值，如果是正常执行，调用 `recover` 会返回 `nil`，且没有其它效果。
+
+总结：panic 会导致栈被展开直到 defer 修饰的 recover() 被调用或者程序中止。
+
+下面例子中的 protect 函数调用函数参数 g 来保护调用者**防止从 g 中抛出的运行时 panic**，并展示 panic 中的信息：
+
+```go
+func protect(g func()) {
+   defer func() {
+      log.Println("done")
+      // Println executes normally even if there is a panic
+      if err := recover(); err != nil {
+         log.Printf("run time panic: %v", err)
+      }
+   }()
+   log.Println("start")
+   g() // possible runtime-error
+}
+```
+
+这跟 Java 和 .NET 这样的语言中的 catch 块类似。
+
+log 包实现了简单的日志功能：默认的 log 对象向标准错误输出中写入并打印每条日志信息的日期和时间。除了 Println 和 Printf 函数，其它的致命性函数都会在写完日志信息后调用 os.Exit(1)，那些退出函数也是如此。而 Panic 效果的函数会在写完日志信息后调用 panic；可以在程序必须中止或发生了临界错误时使用它们，就像当 web 服务器不能启动时那样（参见 15.4 节中的例子）。
+
+log 包用那些方法（methods）定义了一个 Logger 接口类型。
+
+这是一个展示 panic，defer 和 recover 怎么结合使用的完整例子：
+
+```go
+package main
+
+import "fmt"
+
+func badCall() {
+   panic("bad end")
+}
+
+func test() {
+   defer func() {
+      if e := recover(); e != nil {
+         fmt.Printf("Panicing %s\r\n", e)
+      }
+   }() // 调用 func()
+   badCall()
+   fmt.Printf("After bad call\r\n") // <-- wordt niet bereikt
+}
+
+func main() {
+   fmt.Printf("Calling test\r\n")
+   test()
+   fmt.Printf("Test completed\r\n")
+}
+```
+
+defer-panic-recover 在某种意义上也是一种像 `if` ， `for` 这样的控制流机制。
+
+Go 标准库中许多地方都用了这个机制，例如，json 包中的解码和 regexp 包中的 Complie 函数。Go 库的原则 是即使在包的内部使用了 panic，在它的对外接口（API）中也必须用 recover 处理成返回显式的错误。
+
+### 10.4 自定义包中的错误处理和 panicking
+
+这是所有自定义包实现者应该遵守的最佳实践：
+
+1. 在包内部，总是应该从 panic 中 recover：不允许显式的超出包范围的 panic()
+2. 向包的调用者返回错误值（而不是 panic）
+
+在包内部，特别是在非导出函数中有很深层次的嵌套调用时，对主调函数来说用 panic 来表示应该被翻译成错误的错误场景是很有用的（并且提高了代码可读性）。
+
+这在下面的代码中被很好地阐述了。我们有一个简单的 parse 包（示例 13.4）用来把输入的字符串解析为整数切片；这个包有自己特殊的 `ParseError` 。
+
+当没有东西需要转换或者转换成整数失败时，这个包会 panic（在函数 fields2numbers 中）。但是可导出的 Parse 函数会从 panic 中 recover 并用所有这些信息返回一个错误给调用者。为了演示这个过程，在 `panic_recover.go` 中 调用了 parse 包（示例 13.4）；不可解析的字符串会导致错误并被打印出来。
+
+```go
+// parse.go
+package parse
+
+import (
+   "fmt"
+   "strconv"
+   "strings"
+)
+
+// A ParseError indicates an error in converting a word into an integer.
+type ParseError struct {
+   Index int    // The index into the space-separated list of words.
+   Word  string // The word that generated the parse error.
+   Err   error  // The raw error that precipitated this error, if any.
+}
+
+// String returns a human-readable error message.
+func (e *ParseError) String() string {
+   return fmt.Sprintf("pkg parse: error parsing %q as int", e.Word)
+}
+
+// Parse parses the space-separated words in in put as integers.
+func Parse(input string) (numbers []int, err error) {
+   defer func() {
+      if r := recover(); r != nil {
+         var ok bool
+         err, ok = r.(error)
+         if !ok {
+            err = fmt.Errorf("pkg: %v", r)
+         }
+      }
+   }()
+
+   fields := strings.Fields(input)
+   numbers = fields2numbers(fields)
+   return
+}
+
+func fields2numbers(fields []string) (numbers []int) {
+   if len(fields) == 0 {
+      panic("no words to parse")
+   }
+   for idx, field := range fields {
+      num, err := strconv.Atoi(field)
+      if err != nil {
+         panic(&ParseError{idx, field, err})
+      }
+      numbers = append(numbers, num)
+   }
+   return
+}
+```
+
+```go
+// panic_package.go
+package main
+
+import (
+   "fmt"
+   "learnGo/src/Page13/parse"
+)
+
+func main() {
+   var examples = []string{
+      "1 2 3 4 5",
+      "100 50 25 12.5 6.25",
+      "2 + 2 = 4",
+      "1st class",
+      "",
+   }
+
+   for _, ex := range examples {
+      fmt.Printf("Parsing %q:\n ", ex)
+      nums, err := parse.Parse(ex)
+      if err != nil {
+         fmt.Println(err) // here String() method from ParseError is used
+         continue
+      }
+      fmt.Println(nums)
+   }
+}
+```
+
+### 10.5 一种用闭包处理错误的模式
+
+每当函数返回时，我们应该检查是否有错误发生：但是这会导致重复乏味的代码。结合 defer/panic/recover 机制和闭包可以得到一个我们马上要讨论的更加优雅的模式。不过这个模式只有当所有的函数都是同一种签名时可用，这样就有相当大的限制。一个很好的使用它的例子是 web 应用，所有的处理函数都是下面这样：
+
+```go
+func handler1(w http.ResponseWriter, r *http.Request) { ... }
+```
+
+假设所有的函数都有这样的签名：
+
+```go
+ func f(a type1, b type2)
+```
+
+参数的数量和类型是不相关的。
+
+我们给这个类型一个名字：
+
+```go
+fType1 = func f(a type1, b type2)
+```
+
+在我们的模式中使用了两个帮助函数：
+
+1. check：这是用来检查是否有错误和 panic 发生的函数：
+
+   ```go
+   func check(err error) { if err != nil { panic(err) } }
+   ```
+
+2. `errorhandler`：这是一个包装函数。接收一个 `fType1` 类型的函数 `fn` 并返回一个调用 `fn` 的函数。里面就包含有 defer/recover 机制，这在 13.3 节中有相应描述。
+
+   ```go
+   func errorHandler(fn fType1) fType2{
+       return func(a type1, btype2){
+           defer func(){
+               if err, ok := recover().(error); ok {
+                   log.Printf("run time panic: %v", err)
+               }
+           }()
+           fn(a, b)
+       }
+   }
+   ```
+
+当错误发生时会 recover 并打印在日志中；除了简单的打印，应用也可以用 template 包（参见 15.7 节）为用户生成自定义的输出。check() 函数会在所有的被调函数中调用，像这样：
+
+
+
+```go
+ func f1(a type1, b type2) {
+	...
+	f, _, err := // call function/method
+	check(err)
+	t, err := // call function/method
+	check(err)
+	_, err2 := // call function/method
+	check(err2)
+	...
+}
+```
+
+通过这种机制，所有的错误都会被 recover，并且调用函数后的错误检查代码也被简化为调用 check(err) 即可。在这种模式下，不同的错误处理必须对应不同的函数类型；它们（错误处理）可能被隐藏在错误处理包内部。可选的更加通用的方式是用一个空接口类型的切片作为参数和返回值。
+
+### 10.6 启动外部命令和程序
+
+os 包有一个 `StartProcess` 函数可以调用或启动外部系统命令和二进制可执行文件；它的第一个参数是要运行的进程，第二个参数用来传递选项或参数，第三个参数是含有系统环境基本信息的结构体。
+
+这个函数返回被启动进程的 id（pid），或者启动失败返回错误。
+
+exec 包中也有同样功能的更简单的结构体和函数；主要是 `exec.Command(name string, arg ...string)` 和 `Run()` 。首先需要用系统命令或可执行文件的名字创建一个 `Command` 对象，然后用这个对象作为接收者调用 `Run()` 。下面的程序（因为是执行 Linux 命令，只能在 Linux 下面运行）演示了它们的使用：
+
+```go
+// exec.go
+package main
+
+import (
+	"fmt"
+	"os/exec"
+	"os"
+)
+
+func main() {
+	// 1) os.StartProcess //
+	/*********************/
+	/* Linux: */
+	env := os.Environ()
+	procAttr := &os.ProcAttr{
+		Env: env,
+		Files: []*os.File{
+			os.Stdin,
+			os.Stdout,
+			os.Stderr,
+		},
+	}
+	// 1st example: list files
+	pid, err := os.StartProcess("/bin/ls", []string{"ls", "-l"}, procAttr)
+	if err != nil {
+		fmt.Printf("Error %v starting process!", err) //
+		os.Exit(1)
+	}
+	fmt.Printf("The process id is %v", pid)
+	// 2nd example: show all processes
+	pid, err = os.StartProcess("/bin/ps", []string{"-e", "-opid,ppid,comm"}, procAttr)
+
+	if err != nil {
+		fmt.Printf("Error %v starting process!", err) //
+		os.Exit(1)
+	}
+
+	fmt.Printf("The process id is %v", pid)
+	// 2) exec.Run //
+	/***************/
+	// Linux: OK, but not for ls ?
+	// cmd := exec.Command("ls", "-l") // no error, but doesn't show anything ?
+	// cmd := exec.Command("ls") // no error, but doesn't show anything ?
+	cmd := exec.Command("gedit") // this opens a gedit-window
+	err = cmd.Run()
+	if err != nil {
+		fmt.Printf("Error %v executing command!", err)
+		os.Exit(1)
+	}
+	fmt.Printf("The command is %v", cmd)
+	// The command is &{/bin/ls [ls -l] [] <nil> <nil> <nil> 0xf840000210 <nil> true [0xf84000ea50 0xf84000e9f0 0xf84000e9c0] [0xf84000ea50 0xf84000e9f0 0xf84000e9c0] [] [] 0xf8400128c0}
+}
+// in Windows: uitvoering: Error fork/exec /bin/ls: The system cannot find the path specified. starting process!
+
+```
+
+### 10.7 Go 中的单元测试和基准测试
+
+首先所有的包都应该有一定的必要文档，然后同样重要的是对包的测试。
+
+对一个包做（单元）测试，需要写一些可以频繁（每次更新后）执行的小块测试单元来检查代码的正确性。于是我们必须写一些 Go 源文件来测试代码。测试程序必须属于被测试的包，并且文件名满足这种形式 `*_test.go` ，所以测试代码和包中的业务代码是分开的。
+
+`_test` 程序不会被普通的 Go 编译器编译，所以当放应用部署到生产环境时它们不会被部署；只有 gotest 会编译所有的程序：普通程序和测试程序。
+
+测试文件中必须导入 “testing” 包，并写一些名字以 TestZzz 打头的全局函数，这里的 Zzz 是被测试函数的字母描述，如 TestFmtInterface，TestPayEmployees 等。
+
+测试函数必须有这种形式的头部：
+
+```go
+func TestAbcde(t *testing.T)
+```
+
+T 是传给测试函数的结构类型，用来管理测试状态，支持格式化测试日志，如 t.Log，t.Error，t.ErrorF 等。在函数的结尾把输出跟想要的结果对比，如果不等就打印一个错误。成功的测试则直接返回。
+
+用下面这些函数来通知测试失败：
+
+1. `func (t *T) Fail()`
+
+   > 标记测试函数为失败，然后继续执行（剩下的测试）。
+
+2. `func (t *T) FailNow()`
+
+   > 标记测试函数为失败并中止执行；文件中别的测试也被略过，继续执行下一个文件。
+
+3.  `func (t *T) Log(args ...interface{})`
+
+   > args 被用默认的格式格式化并打印到错误日志中。
+
+4. `func (t *T) Fatal(args ...interface{})`
+
+   > 结合 先执行 3），然后执行 2）的效果。
+
+运行 go test 来编译测试程序，并执行程序中所有的 TestZZZ 函数。如果所有的测试都通过会打印出 PASS。
+
+gotest 可以接收一个或多个函数程序作为参数，并指定一些选项。
+
+### 10.8 测试的具体例子
+
+`even_main.go`：
+
+```go
+package main
+
+import (
+	"fmt"
+	"learnGo/src/Page13/even"
+)
+
+func main() {
+	for i := 0; i <= 100; i++ {
+		fmt.Printf("Is the integer %d even ? %v\n", i, even.Even(i))
+	}
+}
+```
+
+`even.go`：
+
+```
+package even
+
+func Even(i int) bool {
+	return i%2 == 0
+}
+func Odd(i int) bool {
+	return i%2 != 0
+}
+
+```
+
+`even/oddeven_test.go`：
+
+```go
+package even
+
+import "testing"
+
+func TestEven(t *testing.T) {
+   if !Even(10) {
+      t.Log("10 must be even!")
+      t.Fail()
+   }
+   if Even(7) {
+      t.Log("7 is not even!")
+      t.Fail()
+   }
+}
+func TestOdd(t *testing.T) {
+   if !Odd(11) {
+      t.Log("11 must be Odd!")
+      t.Fail()
+   }
+   if Odd(10) {
+      t.Log("10 is not odd!")
+      t.Fail()
+   }
+}
+```
+
+由于测试需要具体的输入用例且不可能测试到所有的用例（非常像一个无穷的数），所以我们必须对要使用的测试用例思考再三。
+
+至少应该包括：
+
+- 正常的用例
+- 反面的用例（错误的输入，如用负数或字母代替数字，没有输入等）
+- 边界检查用例（如果参数的取值范围是 0 到 1000，检查 0 和 1000 的情况）
+
+可以直接执行 go install 安装 even 或者创建一个 以下内容的 Makefile：
+
+```makefile
+include $(GOROOT)/src/Make.inc
+TARG=even
+ GOFILES=\
+ 		 even.go\
+include $(GOROOT)/src/Make.pkg
+```
+
+然后执行 make（或 gomake）命令来构建归档文件 even.a
+
+测试代码不能在 GOFILES 参数中引用，因为我们不希望生成的程序中有测试代码。如果包含了测试代码，go test 会给出错误提示！go test 会生成一个单独的包含测试代码的 _test 程序。
+
+### 10.9 用（测试数据）表驱动测试
+
+编写测试代码时，一个较好的办法是把测试的输入数据和期望的结果写在一起组成一个数据表：表中的每条记录都是一个含有输入和期望值的完整测试用例，有时还可以结合像测试名字这样的额外信息来让测试输出更多的信息。
+
+实际测试时简单迭代表中的每条记录，并执行必要的测试。这在练习 13.4 中有具体的应用。
+
+可以抽象为下面的代码段：
+
+```go
+var tests = []struct { // Test table
+   in  string
+   out string
+}{
+   {“in1”, “exp1”},
+   {“in2”, “exp2”},
+   {“in3”, “exp3”},
+   ...
+}
+
+func TestFunction(t *testing.T) {
+   for i, tt := range tests {
+      s := FuncToBeTested(tt.in)
+      if s != tt.out {
+         t.Errorf(“%d. %q => %q, wanted: %q”, i, tt.in, s, tt.out)
+      }
+   }
+}
+```
+
+如果大部分函数都可以写成这种形式，那么写一个帮助函数 verify 对实际测试会很有帮助：
+
+```go
+func verify(t *testing.T, testnum int, testcase, input, output, expected string) {
+   if expected != output {
+      t.Errorf("%d. %s with input = %s: output%s != % s", testnum, testcase, input, output, expected)
+   }
+}
+```
+
+TestFunction 则变为：
+
+```go
+func TestFunction(t *testing.T) {
+   for i, tt := range tests {
+      s := FuncToBeTested(tt.in)
+      verify(t, i, “FuncToBeTested: “, tt.in, s, tt.out)
+   }
+}
+```
+
+### 10.10 性能调试：分析并优化 Go 程序
+
+#### 10.10.1 时间和内存消耗
+
+可以用这个便捷脚本 xtime 来测量：
+
+```bash
+#!/bin/sh
+/usr/bin/time -f '%Uu %Ss %er %MkB %C' "$@'
+```
+
+在 Unix 命令行中像这样使用 xtime goprogexec ，这里的 progexec 是一个 Go 可执行程序，这句命令行输出类似：56.63u 0.26s 56.92r 1642640kB progexec，分别对应用户时间，系统时间，实际时间和最大内存占用。
+
+#### 10.10.2 用 go test 调试
+
+如果代码使用了 Go 中 testing 包的基准测试功能，我们可以用 gotest 标准的 `-cpuprofile` 和 `-memprofile` 标志向指定文件写入 CPU 或 内存使用情况报告。
+
+使用方式： `go test -x -v -cpuprofile=prof.out -file x_test.go`
+
+编译执行 x_test.go 中的测试，并向 prof.out 文件中写入 cpu 性能分析信息。
+
+#### 10.10.3 用 pprof 调试
+
+你可以在单机程序 progexec 中引入 runtime/pprof 包；这个包以 pprof 可视化工具需要的格式写入运行时报告数据。对于 CPU 性能分析来说你需要添加一些代码：
+
+```go
+var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
+
+func main() {
+   flag.Parse()
+   if *cpuprofile != "" {
+      f, err := os.Create(*cpuprofile)
+      if err != nil {
+         log.Fatal(err)
+      }
+      pprof.StartCPUProfile(f)
+      defer pprof.StopCPUProfile()
+   }
+   ...
+```
+
+代码定义了一个名为 cpuprofile 的 flag，调用 Go flag 库来解析命令行 flag，如果命令行设置了 cpuprofile flag，则开始 CPU 性能分析并把结果重定向到那个文件。（os.Create 用拿到的名字创建了用来写入分析数据的文件）。这个分析程序最后需要在程序退出之前调用 StopCPUProfile 来刷新挂起的写操作到文件中；我们用 defer 来保证这一切会在 main 返回时触发。
+
+现在用这个 flag 运行程序： `progexec -cpuprofile=progexec.prof`
+
+然后可以像这样用 gopprof 工具： `gopprof progexec progexec.prof`
+
+## 11. 协程（goroutine）与通道（channel）
+
+### 11.1 什么是协程
+
+#### 11.1.1 什么是协程
+
+一个应用程序是运行在机器上的一个进程；进**程是一个运行在自己内存地址空间里的独立执行体**。一个进程**由一个或多个操作系统线程组成**，这些**线程其实是共享同一个内存地址空间的一起工作的执行体**。
+
+一个并发程序可以在一个处理器或者内核上使用多个线程来执行任务，但是**只有同一个程序在某个时间点同时运行在多核或者多处理器上才是真正的并行**。
+
+并行是一种通过使用多处理器以提高速度的能力。所以并发程序可以是并行的，也可以不是。
+
+使用多线程的应用难以做到准确，最主要的问题是内存中的数据共享，它们会被多线程以无法预知的方式进行操作，导致一些无法重现或者随机的结果（称作 竞态 ）。
+
+不要使用全局变量或者共享内存，它们会给你的代码在并发运算的时候带来危险。
+
+解决之道在于同步不同的线程，对数据加锁，这样同时就只有一个线程可以变更数据。在 Go 的标准库 sync 中有一些工具用来在低级别的代码中实现加锁；
+
+Go 更倾向于其他的方式，在诸多比较合适的范式中，有个被称作 `Communicating Sequential Processes`（顺序通信处理） （CSP, C. Hoare 发明的）还有一个叫做 `message passing-model`（消息传递） （已经运用在了其他语言中，比 如 Erlang）。
+
+在 Go 中，应用程序并发处理的部分被称作 `goroutines`（协程） ，它可以进行更有效的并发运算。在协程和操作系统线程之间并无一对一的关系：协程是根据一个或多个线程的可用性，映射（多路复用，执行于）在他们之上的；协程调度器在 Go 运行时很好的完成了这个工作。
+
+**协程工作在相同的地址空间中，所以共享内存的方式一定是同步的**；这个可以使用 sync 包来实现（参见第 9.3 节），不过我们很不鼓励这样做：Go 使用 **channels** 来同步协程。
+
+当系统调用（比如等待 I/O）阻塞协程时，其他协程会继续在其他线程上工作。协程的设计隐藏了许多线程创建和管理方面的复杂工作。
+
+协程是轻量的，比线程更轻。它们痕迹非常不明显（使用少量的内存和资源）：使用 4K 的栈内存就可以在堆中创建它们。因为创建非常廉价，必要的时候可以轻松创建并运行大量的协程（在同一个地址空间中 100,000 个连续的协程）。并且它们对栈进行了分割，从而动态的增加（或缩减）内存的使用；栈的管理是自动的，但不是由垃圾回收器管理的，而是在协程退出后自动释放。
+
+协程可以运行在多个操作系统线程之间，也可以运行在线程之内，让你可以很小的内存占用就可以处理大量的任务。由于操作系统线程上的协程时间片，你可以使用少量的操作系统线程就能拥有任意多个提供服务的协程，而且 Go 运行时可以聪明的意识到哪些协程被阻塞了，暂时搁置它们并处理其他协程。
+
+存在两种并发方式：确**定性的（明确定义排序）**和**非确定性的（加锁/互斥从而未定义排序）**。Go 的协程和通道理所当然的支持确定性的并发方式（例如通道具有一个 sender 和一个 receiver）。我们会在第 14.7 节中使用一个常见的算法问题（工人问题）来对比两种处理方式。
+
+协程是通过使用关键字 go 调用（执行）一个函数或者方法来实现的（也可以是匿名或者 lambda 函数）。这样会在当前的计算过程中开始一个同时进行的函数，在相同的地址空间中并且分配了独立的栈，比如： `go sum(bigArray)` ，在后台计算总和。
+
+协程的栈会根据需要进行伸缩，不出现栈溢出；开发者不需要关心栈的大小。当协程结束的时候，它会静默退出：用来启动这个协程的函数不会得到任何的返回值。
+
+任何 Go 程序都必须有的 **main() 函数也可以看做是一个协程**，尽管它并没有通过 go 来启动。**协程可以在程序初始化的过程中运行**（在 init() 函数中）。
+
+在一个协程中，比如它需要进行非常密集的运算，你可以在运算循环中周期的使用 `runtime.Gosched()` ：这会让出处理器，允许运行其他协程；它并不会使当前协程挂起，所以它会自动恢复执行。使用 `Gosched()` 可以使计算均匀分布，使通信不至于迟迟得不到响应。
+
+#### 11.1.2 并发和并行的差异
+
+Go 的并发原语提供了良好的并发设计基础：表达程序结构以便表示独立地执行的动作；所以Go的的重点不在于并行的首要位置：**并发程序可能是并行的，也可能不是**。并行是一种通过使用多处理器以提高速度的能力。但往往是，一个设计良好的并发程序在并行方面的表现也非常出色。
+
+并且只有 gc 编译器真正实现了协程，适当的把协程映射到操作系统线程。使用 gccgo 编译器，会为每一个协程创建操作系统线程。
+
+#### 11.1.3 使用 GOMAXPROCS
+
+在 gc 编译器下（6g 或者 8g）你必须设置 `GOMAXPROCS` 为一个大于默认值 1 的数值来允许运行时支持使用多于 1 个的操作系统线程，所有的协程都会共享同一个线程除非将 `GOMAXPROCS` 设置为一个大于 1 的数。当 `GOMAXPROCS` 大于 1 时，会有一个线程池管理许多的线程。
+
+通过 `gccgo` 编译器 `GOMAXPROCS` 有效的与运行中的协程数量相等。假设 n 是机器上处理器或者核心的数量。如果你设置环境变量 `GOMAXPROCS>=n`，或者执行 `runtime.GOMAXPROCS(n)` ，接下来**协程会被分割（分散）到 n 个处理器上**。更多的处理器并不意味着性能的线性提升。有这样一个经验法则，对于 n 个核心的情况设置 `GOMAXPROCS` 为 n-1 以获得最佳性能，也同样需要遵守这条规则：`协程的数量 > 1 + GOMAXPROCS > 1`。
+
+所以如果在某一时间只有一个协程在执行，**不要设置 GOMAXPROCS**！
+
+#### 11.1.4 如何用命令行指定使用的核心数量
+
+使用 flags 包，如下：
+
+```go
+var numCores = flag.Int("n", "2", "number of CPU cores to use")
+in main()
+flag.Parse()
+runtime.GOMAXPROCS(*numCores)
+```
+
+协程可以通过调用 runtime.Goexit() 来停止，但没有必要。
+
+goroutine1.go 介绍了概念：
+
+```go
+package main
+
+import (
+   "fmt"
+   "time"
+)
+
+func main() {
+   fmt.Println("In main()")
+   go longWait()
+   go shortWait()
+   fmt.Println("About to sleep in main()")
+   // sleep works with a Duration in nanoseconds (ns) !
+   time.Sleep(10 * 1e9)
+   fmt.Println("At the end of main()")
+}
+
+func longWait() {
+   fmt.Println("Beginning longWait()")
+   time.Sleep(5 * 1e9) // sleep for 5 seconds
+   fmt.Println("End of longWait()")
+}
+
+func shortWait() {
+   fmt.Println("Beginning shortWait()")
+   time.Sleep(2 * 1e9) // sleep for 2 seconds
+   fmt.Println("End of shortWait()")
+}
+```
+
+`main()` ， `longWait()` 和 `shortWait()` 三个函数作为独立的处理单元按顺序启动，然后开始并行运行。每一个函数都在运行的开始和结束阶段输出了消息。为了模拟他们运算的时间消耗，我们使用了 `time` 包中的 `Sleep` 函数。 `Sleep()` 可以按照指定的时间来暂停函数或协程的执行，这里使用了纳秒（ns，符号 1e9 表示 1 乘 10 的 9 次方，e=指数）。
+
+他们按照我们期望的顺序打印出了消息，几乎都一样，可是我们明白这是模拟出来的，以并行的方式。我们让 main() 函数暂停 10 秒从而确定它会在另外两个协程之后结束。如果不这样（如果我们让 main() 函数停止 4 秒）， main() 会提前结束， longWait() 则无法完成。如果我们不在 main() 中等待，协程会随着程序的结束而消亡。
+
+当 `main()` 函数返回的时候，程序退出：它不会等待任何其他非 main 协程的结束。这就是为什么在服务器程序中，每一个请求都会启动一个协程来处理， `server()` 函数必须保持运行状态。通常使用一个无限循环来达到这样的目的。
+
+另外，**协程是独立的处理单元**，一旦陆续启动一些协程，你无法确定他们是什么时候真正开始执行的。你的代码逻辑必须独立于协程调用的顺序。
+
+#### 11.1.5 Go 协程（goroutines）和协程（coroutines）
+
+在其他语言中，比如 C#，Lua 或者 Python 都有协程的概念。这个名字表明它和 Go协程有些相似，不过有两点不同：
+
+- Go 协程意味着**并行**（或者可以以并行的方式部署），协程一般来说不是这样的
+- Go 协程通过**通道**来通信；协程通过让出和恢复操作来通信
+
+Go 协程通过通道来通信；协程通过让出和恢复操作来通信
+
+### 11.2 协程间的信道
+
+#### 11.2.1 概念
+
+在第一个例子中，**协程是独立执行的**，他们之间没有通信。他们必须通信才会变得更有用：彼此之间**发送和接收信息并且协调/同步他们的工作**。协程**可以使用共享变量来通信，但是很不提倡这样做**，因为这种方式给所有的共享内存的多线程都带来了困难。
+
+而Go有一个特殊的类型， `通道（channel）` ，像是通道（管道），可以通过它们发送类型化的数据在协程之间通信，可以避开所有内存共享导致的坑；通道的通信方式保证了同步性。数据通过通道：同一时间只有一个协程可以访问数据：所以不会出现数据竞争，设计如此。数据的归属（可以读写数据的能力）被传递。
+
+工厂的传送带是个很有用的例子。一个机器（生产者协程）在传送带上放置物品，另外一个机器（消费者协程）拿到 物品并打包。
+
+**通道服务于通信的两个目的：值的交换，同步的，保证了两个计算（协程）任何时候都是可知状态。**
+
+![image-20220330161256613](Go笔记.assets/image-20220330161256613.png)
+
+通常使用这样的格式来声明通道： `var identifier chan datatype`
+
+未初始化的通道的值是nil。
+
+所以通道**只能传输一种类型的数据**，比如 `chan int` 或者 `chan string` ，所有的类型都可以用于通道，空接口 interface{} 也可以。甚至可以（有时非常有用）创建通道的通道。
+
+通道实际上是**类型化消息的队列**：使数据得以传输。它是**先进先出（FIFO）的结构所以可以保证发送给他们的元素的顺序**（有些人知道，通道可以比作 Unix shells 中的双向管道（two-way pipe））。**通道也是引用类型，所以我们使用 make() 函数来给它分配内存**。这里先声明了一个字符串通道 `ch1`，然后创建了它（实例化）：
+
+```go
+var ch1 chan string
+ch1 = make(chan string)
+```
+
+当然可以更短： `ch1 := make(chan string)` 。
+
+这里我们构建一个int通道的通道： `chanOfChans := make(chan int)` 。
+
+或者函数通道： `funcChan := chan func()` （相关示例请看第 14.17 节）。
+
+所以通道是对象的第一类型：可以存储在变量中，作为函数的参数传递，从函数返回以及通过通道发送它们自身。另外它们是类型化的，允许类型检查，比如尝试使用整数通道发送一个指针。
+
+#### 11.2.2 通信操作符 <-
+
+这个操作符直观的标示了数据的传输：信息按照箭头的方向流动。
+
+流向通道（发送）
+
+`ch <- int1` 表示：用通道 `ch` 发送变量 `int1`（双目运算符，中缀 = 发送）
+
+从通道流出（接收），三种方式：
+
+`int2 = <- ch` 表示：变量 `int2` 从通道 ch（一元运算的前缀操作符，前缀 = 接收）接收数据（获取新值）；假设 int2 已经声明过了，如果没有的话可以写成： `int2 := <- ch` 。
+
+`<- ch` 可以单独调用获取通道的（下一个）值，当前值会被丢弃，但是可以用来验证，所以以下代码是合法的：
+
+```go
+if <- ch != 1000{
+    ...
+}
+```
+
+操作符 `<-` 也被用来发送和接收，Go 尽管不必要，为了可读性，通道的命名通常以 `ch` 开头或者包含 chan 。通道的发送和接收操作都是自动的：它们通常一气呵成。下面的示例展示了通信操作。
+
+```go
+package main
+
+import (
+   "fmt"
+   "time"
+)
+
+func main() {
+   ch := make(chan string)
+
+   go sendData(ch)
+   go getData(ch)
+
+   time.Sleep(1e9)
+
+}
+func sendData(ch chan string) {
+   ch <- "Washington"
+   ch <- "Tripoli"
+   ch <- "London"
+   ch <- "Beijing"
+   ch <- "Tokio"
+}
+func getData(ch chan string) {
+   var input string
+   for {
+      input = <-ch
+      fmt.Printf("%s ", input)
+   }
+}
+```
+
+`main()` 函数中启动了两个协程： `sendData()` 通过通道 ch 发送了 5 个字符串， `getData()` 按顺序接收它们并打印出来。
+
+如果 2 个协程需要通信，你必须给他们同一个通道作为参数才行。
+
+我们发现协程之间的同步非常重要：
+
+- main() 等待了 1 秒让两个协程完成，如果不这样，sendData() 就没有机会输出。
+
+- getData() 使用了无限循环：它随着 sendData() 的发送完成和 ch 变空也结束了。
+
+- 如果我们移除一个或所有 go 关键字，程序无法运行，Go 运行时会抛出 panic：
+
+  `---- Error run E:/Go/Goboek/code examples/chapter 14/goroutine2.exe with code Crashed ---- Program exited with code -2147483645: panic: all goroutines are asleep-deadlock!`
+
+运行时会检查所有的协程（也许只有一个是这种情况）是否在等待（可以读取或者写入某个通道），意味着程序无法处理。这是死锁（deadlock）形式，运行时可以检测到这种情况。
+
+不要使用打印状态来表明通道的发送和接收顺序：由于打印状态和通道实际发生读写的时间延迟会导致和真实发生的顺序不同。
+
+#### 11.2.3 通道阻塞
+
+默认情况下，**通信是同步且无缓冲的**：在有接受者接收数据之前，发送不会结束。可以想象一个**无缓冲的通道在没有空间来保存数据**的时候：**必须要一个接收者准备好接收通道的数据然后发送者可以直接把数据发送给接收者**。所以通道的发送/接收操作在对方准备好之前是阻塞的：
+
+1. 对于同一个通道，发送操作（协程或者函数中的），在接收者准备好之前是阻塞的：如果ch中的数据无人接收，就无法再给通道传入其他数据：新的输入无法在通道非空的情况下传入。所以发送操作会等待 ch 再次变为可用状态：就是通道值被接收时（可以传入变量）。
+2. 对于同一个通道，接收操作是阻塞的（协程或函数中的），直到发送者可用：如果通道中没有数据，接收者就阻塞了。
+
+程序 channel_block.go 验证了以上理论，一个协程在无限循环中给通道发送整数数据。不过因为没有接收者，只输出了一个数字 0。
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+   ch1 := make(chan int)
+   go pump(ch1)       // pump hangs
+   fmt.Println(<-ch1) // prints only 0
+}
+func pump(ch1 chan int) {
+   for i := 0; ; i++ {
+      ch1 <- i
+   }
+}
+```
+
+pump() 函数为通道提供数值，也被叫做生产者。
+
+为通道解除阻塞定义了 suck 函数来在无限循环中读取通道，参见示例 14.4-channel_block2.go：
+
+```go
+package main
+
+import (
+   "fmt"
+   "time"
+)
+
+func main() {
+   ch1 := make(chan int)
+   go pump(ch1) // pump hangs
+   go suck(ch1)
+   time.Sleep(1 * 1e9)
+}
+func suck(ch1 chan int) {
+   for {
+      fmt.Println(<-ch1)
+   }
+}
+func pump(ch1 chan int) {
+   for i := 0; ; i++ {
+      ch1 <- i
+   }
+}
+```
+
+#### 11.2.4 通过一个（或多个）通道交换数据进行协程同步。
+
+通信是一种同步形式：通过通道，两个协程在通信（协程会和）中某刻同步交换数据。无缓冲通道成为了多个协程同步的完美工具。
+
+甚至可以在通道两端互相阻塞对方，形成了叫做死锁的状态。Go 运行时会检查并 panic，停止程序。死锁几乎完全是由糟糕的设计导致的。
+
+无缓冲通道会被阻塞。设计无阻塞的程序可以避免这种情况，或者使用带缓冲的通道。
+
+```go
+package main
+
+import (
+   "fmt"
+   "time"
+)
+
+func main() {
+   out := make(chan int)
+   out <- 2 // 通道属于 无缓冲通道，即容量为 0，当该行代码执行的时候，因为容量为0，所以阻塞，导致死锁
+   go f1(out)
+   time.Sleep(10 * 1e9)
+
+}
+func f1(in chan int) {
+   for {
+      fmt.Println(<-in)
+   }
+
+}
+```
+
+### 11.3 协程的同步：关闭通道-测试阻塞的通道
+
+一个无缓冲通道只能包含 1 个元素，有时显得很局限。我们给通道提供了一个缓存，可以在扩展的 make 命令中设置它的容量，如下：
+
+```go
+buf := 100
+ch := make(chan string, buf)
+```
+
+buf 是通道可以同时容纳的元素（这里是 string）个数
+
+在缓冲满载（缓冲被全部使用）之前，给一个带缓冲的通道发送数据是不会阻塞的，而从通道读取数据也不会阻塞，直到缓冲空了。
+
+缓冲容量和类型无关，所以可以（尽管可能导致危险）**给一些通道设置不同的容量**，只要他们拥有同样的元素类型。内置的 cap 函数可以返回缓冲区的容量。
+
+如果容量大于 0，通道就是异步的了：缓冲满载（发送）或变空（接收）之前通信不会阻塞，元素会按照发送的顺序被接收。如果容量是0或者未设置，通信仅在收发双方准备好的情况下才可以成功。
+
+同步： `ch :=make(chan type, value)`
+
+- `value == 0 -> synchronous, unbuffered` (阻塞）
+- `value > 0 -> asynchronous, buffered`（非阻塞）取决于value元素
+
+若使用通道的缓冲，你的程序会在“请求”激增的时候表现更好：更具弹性，专业术语叫：更具有伸缩性（scalable）。要在首要位置使用无缓冲通道来设计算法，只在不确定的情况下使用缓冲。
+
+#### 11.2.6 协程中用通道输出结果
+
+为了知道计算何时完成，可以通过信道回报。在例子 `go sum(bigArray)` 中，要这样写：
+
+```go
+ch := make(chan int)
+go sum(bigArray, ch) // bigArray puts the calculated sum on ch
+ // .. do something else for a while
+sum := <- ch  // wait for, and retrieve the sum
+```
+
+也可以使用通道来达到同步的目的，这个很有效的用法在传统计算机中称为信号量（semaphore）。或者换个方式：通过通道发送信号告知处理已经完成（在协程中）。
+
+在其他协程运行时让 main 程序无限阻塞的通常做法是在 `main` 函数的最后放置一个{}。
+
+也可以使用通道让 main 程序等待协程完成，就是所谓的信号量模式，我们会在接下来的部分讨论。
+
+#### 11.2.7 信号量模式
+
+下边的片段阐明：协程通过在通道 ch 中放置一个值来处理结束的信号。 main 协程等待 <-ch 直到从中获取到值。
+
+我们期望从这个通道中获取返回的结果，像这样：
+
+```go
+func compute(ch chan int) {
+   ch <- someComputation() // when it completes, signal on the channel.
+}
+
+func main() {
+   ch := make(chan int) // allocate a channel.
+   go compute(ch)       // stat something in a goroutines
+   doSomethingElseForAWhile()
+   result := <-ch
+}
+```
+
+这个信号也可以是其他的，不返回结果，比如下面这个协程中的匿名函数（lambda）协程：
+
+```go
+ch := make(chan int)
+go func() {
+	// doSomething
+	ch <- 1 // Send a signal; value does not matter
+}()
+doSomethingElseForAWhile()
+<- ch // Wait for goroutine to finish; discard sent value.
+}
+```
+
+或者等待两个协程完成，每一个都会对切片s的一部分进行排序，片段如下：
+
+```go
+done := make(chan bool)
+// doSort is a lambda function, so a closure which knows the channel done:
+doSort := func(s []int){
+	sort(s)
+	done <- true
+}
+i := pivot(s)
+go doSort(s[:i])
+go doSort(s[i:])
+<- done
+<- done
+```
+
+下边的代码，用完整的信号量模式对长度为N的 float64 切片进行了 N 个 `doSomething()` 计算并同时完成，通道 sem 分配了相同的长度（切包含空接口类型的元素），待所有的计算都完成后，发送信号（通过放入值）。在循环中从通道 sem 不停的接收数据来等待所有的协程完成。
+
+```go
+type Empty interface{}
+var empty Empty
+...
+data := make([]float64, N)
+res := make([]float64, N)
+sem := make(chan Empty, N)
+...
+for i, xi := range data {
+   go func (i int, xi float64) {
+      res[i] = doSomething(i, xi)
+      sem <- empty
+   } (i, xi)
+}
+// wait for goroutines to finish
+for i := 0; i < N; i++ { <-sem }
+```
+
+注意闭合： `i` 、 `xi` 都是作为参数传入闭合函数的，从外层循环中隐藏了变量 `i` 和 `xi` 。让每个协程有一份 `i` 和 `xi` 的拷贝；另外，for 循环的下一次迭代会更新所有协程中 `i` 和 `xi` 的值。切片 `res` 没有传入闭合函数，因为协程不需要单独拷贝一份。切片 `res` 也在闭合函数中但并不是参数。
+
+#### 11.2.8 实现并行的 for 循环
+
+在上一部分章节 14.2.7 的代码片段中：for 循环的每一个迭代是并行完成的：
+
+```go
+for i, v := range data {
+	go func(i int, v float64){
+		doSomething(i, v)
+		...
+	}(i, v)
+}
+```
+
+在 for 循环中并行计算迭代可能带来很好的性能提升。不过所有的迭代都必须是独立完成的。有些语言比如 Fortress 或者其他并行框架以不同的结构实现了这种方式，在 Go 中用协程实现起来非常容易
+
+#### 11.2.9 用带缓冲通道实现一个信号量
+
+信号量是实现互斥锁（排外锁）常见的同步机制，限制对资源的访问，解决读写问题，比如没有实现信号量的 `sync` 的 Go 包，使用带缓冲的通道可以轻松实现：
+
+- 带缓冲通道的容量和要同步的资源容量相同 
+- 通道的长度（当前存放的元素个数）与当前资源被使用的数量相同 
+- 容量减去通道的长度就是未处理的资源个数（标准信号量的整数值）
+
+不用管通道中存放的是什么，只关注长度；因此我们创建了一个长度可变但容量为0（字节）的通道：
+
+```go
+type Empty interface {}
+type semaphore chan Empty
+```
+
+将可用资源的数量N来初始化信号量 `semaphore` ： `sem = make(semaphore, N)`
+
+然后直接对信号量进行操作：
+
+```go
+// acquire n resources
+func (s semaphore) P (n int){
+	e := new(Empty)
+	for i := 0; i < n; i++{
+		s <- e
+	}
+}
+
+ // release n resouces
+func (s semaphore) V(n int){
+	for i := 0; i < n; i++{
+		<-  s
+	}
+}
+```
+
+可以用来实现一个互斥的例子：
+
+```go
+// mutexes
+func (s semaphore) Lock() {
+	s.P(1)
+}
+func (s semaphore) Unlock(){
+	s.V(1)
+}
+// signal-wait
+func (s semaphore) Wait(n int){
+	s.P(n)
+}
+func (s semaphore) Signal(){
+	s.V(1)
+}
+```
+
+#### 11.2.10 给通道使用 for 循环
+
+`for` 循环的 `range` 语句可以用在通道 ch 上，便可以从通道中获取值，像这样：
+
+```go
+for v := range ch{
+	fmt.Printf("The value is %v\n", v)
+}
+```
+
+它从指定通道中读取数据直到通道关闭，才继续执行下边的代码。很明显，另外一个协程必须写入 ch （不然代码就阻塞在 for 循环了），而且必须在写入完成后才关闭。 suck 函数可以这样写，且在协程中调用这个动作，程序变成了这样：
 
 
 
@@ -4161,6 +7448,17 @@ func (i *Integer) String() string{
 
 
 
+### 11.4 使用 select 切换协程
+
+### 11.5 通道、超时和计时器（Ticker）
+
+### 11.6 协程和恢复（recover）
+
+### 11.7 新旧模型对比：任务和worker
+
+### 11.8 惰性生成器的实现
+
+### 11.9 实现 Futures 模式
 
 
 
