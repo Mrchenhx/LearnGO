@@ -7239,7 +7239,7 @@ func f1(in chan int) {
 }
 ```
 
-### 11.3 协程的同步：关闭通道-测试阻塞的通道
+#### 14.2.5 同步通道-使用带缓冲的通道
 
 一个无缓冲通道只能包含 1 个元素，有时显得很局限。我们给通道提供了一个缓存，可以在扩展的 make 命令中设置它的容量，如下：
 
@@ -7432,25 +7432,466 @@ for v := range ch{
 
 它从指定通道中读取数据直到通道关闭，才继续执行下边的代码。很明显，另外一个协程必须写入 ch （不然代码就阻塞在 for 循环了），而且必须在写入完成后才关闭。 suck 函数可以这样写，且在协程中调用这个动作，程序变成了这样：
 
+```go
+package main
 
+import (
+   "fmt"
+   "time"
+)
 
+func main() {
+   suck(pump())
+   time.Sleep(1e9)
+}
+func pump() chan int {
+   ch := make(chan int)
+   go func() {
+      for i := 0; ; i++ {
+         ch <- i
+      }
+   }()
+   return ch
+}
+func suck(ch chan int) {
+   go func() {
+      for v := range ch {
+         fmt.Println(v)
+      }
+   }()
+}
+```
 
+习惯用法：通道迭代模式
 
+这个模式用到了后边14.6章示例 producer_consumer.go 的生产者-消费者模式，通常，需要从包含了地址索引 字段 items 的容器给通道填入元素。为容器的类型定义一个方法 Iter() ，返回一个只读的通道（参见第 14.2.8 节）items，如下：
 
+```go
+func (c *container) Iter () <- chan items {
+    ch := make(chan item)
+    go func(){
+        for i:=0; i < c.Len(); i++{
+            ch <- c.items[i]
+        }
+    }()
+    return ch
+}
+```
 
+在协程里，一个 for 循环迭代容器 c 中的元素（对于树或图的算法，这种简单的 for 循环可以替换为深度优先搜索）。
 
+调用这个方法的代码可以这样迭代容器：
 
+```gio
+for x := range container.Iter() { ... }
+```
 
+可以运行在自己的协程中，所以上边的迭代用到了一个通道和两个协程（可能运行在两个线程上）。就有了一个特殊的生产者-消费者模式。
 
+如果程序在协程给通道写完值之前结束，协程不会被回收；设计如此。这种行为看起来是错误的，但是通道是一种线程安全的通信。在这种情况下，协程尝试写入一个通道，而这个通道永远不会被读取，这可能是个 bug 而并非期望它被静默的回收。
 
+习惯用法：生产者消费者模式
 
+假设你有 `Produce()` 函数来产生 `Consume` 函数需要的值。它们都可以运行在独立的协程中，生产者在通道中放入给消费者读取的值。整个处理过程可以替换为无限循环：
 
+```go
+for {
+	Consume(Produce())
+}
+```
 
+#### 11.2.11 通道的方向
 
+通道类型可以用注解来表示它只发送或者只接收：
+
+```go
+var send_only chan<- int // channel can only send data
+var recv_only <-chan int // channel can only receive data
+```
+
+只接收的通道（<-chan T）无法关闭，因为关闭通道是发送者用来表示不再给通道发送值了，所以对只接收通道是没有意义的。通道创建的时候都是双向的，但也可以分配有方向的通道变量，就像以下代码：
+
+```go
+var c = make(chan int) // bidirectional 双向
+go source(c)
+go sink(c)
+func source(ch chan <- int){
+	for{ch <- 1}
+}
+func sink(ch <- chan int) {
+	for{ <- ch}
+}
+```
+
+习惯用法：管道和选择器模式
+
+更具体的例子还有协程处理它从通道接收的数据并发送给输出通道：
+
+```go
+sendChan := make(chan int)
+reciveChan := make(chan string)
+go processChannel(sendChan, receiveChan)
+
+func processChannel(in <-chan int, out chan<- string) {
+   for inValue := range in {
+      result := ... /// processing inValue
+      out <- result
+   }
+}
+```
+
+通过使用方向注解来限制协程对通道的操作。
+
+这里有一个来自 Go 指导的很赞的例子，打印了输出的素数，使用选择器（‘筛’）作为它的算法。每个 prime 都有一个选择器，如下图：
+
+![image-20220330225014431](Go笔记.assets/image-20220330225014431.png)
+
+```go
+// Copyright 2009 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.package main
+package main
+
+import "fmt"
+
+// Send the sequence 2, 3, 4, ... to channel 'ch'.
+func generate(ch chan int) {
+   for i := 2; ; i++ {
+      ch <- i // Send 'i' to channel 'ch'.
+   }
+}
+
+// Copy the values from channel 'in' to channel 'out',
+// removing those divisible by 'prime'.
+func filter(in, out chan int, prime int) {
+   for {
+      i := <-in // Receive value of new variable 'i' from 'in'.
+      if i%prime != 0 {
+         out <- i // Send 'i' to channel 'out'.
+      }
+   }
+}
+
+// The prime sieve: Daisy-chain filter processes together.
+func main() {
+   ch := make(chan int) // Create a new channel.
+   go generate(ch)      // Start generate() as a goroutine.
+   for {
+      prime := <-ch
+      fmt.Print(prime, " ")
+      ch1 := make(chan int)
+      go filter(ch, ch1, prime)
+      ch = ch1
+   }
+}
+```
+
+协程 `filter(in, out chan int, prime int)` 拷贝整数到输出通道，丢弃掉可以被 prime 整除的数字。然后每个 prime 又开启了一个新的协程，生成器和选择器并发请求。
+
+第二个版本引入了上边的习惯用法：函数 `sieve` 、 `generate` 和 `filter` 都是工厂；它们创建通道并返回，而且使用了协程的 lambda 函数。 main 函数现在短小清晰：它调用 `sieve()` 返回了包含素数的通道，然后通过 `fmt.Println(<-primes)` 打印出来。
+
+```go
+// Copyright 2009 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package main
+
+import (
+   "fmt"
+)
+
+// Send the sequence 2, 3, 4, ... to returned channel
+func generate() chan int {
+   ch := make(chan int)
+   go func() {
+      for i := 2; ; i++ {
+         ch <- i
+      }
+   }()
+   return ch
+}
+
+// Filter out input values divisible by 'prime', send rest to returned channel
+func filter(in chan int, prime int) chan int {
+   out := make(chan int)
+   go func() {
+      for {
+         if i := <-in; i%prime != 0 {
+            out <- i
+         }
+      }
+   }()
+   return out
+}
+
+func sieve() chan int {
+   out := make(chan int)
+   go func() {
+      ch := generate()
+      for {
+         prime := <-ch
+         ch = filter(ch, prime)
+         out <- prime
+      }
+   }()
+   return out
+}
+
+func main() {
+   primes := sieve()
+   for {
+      fmt.Println(<-primes)
+   }
+}
+```
+
+### 11.3 协程的同步：关闭通道-测试阻塞的通道
+
+通道可以被显式的关闭；尽管它们和文件不同：不必每次都关闭。只有在当需要告诉接收者不会再提供新的值的时候，才需要关闭通道。只有发送者需要关闭通道，接收者永远不会需要。
+
+继续看示例 goroutine2.go（示例 14.2）：我们如何在通道的 sendData() 完成的时候发送一个信号， getData() 又如何检测到通道是否关闭或阻塞？
+
+第一个可以通过函数 `close(ch)` 来完成：这个将通道标记为无法通过发送操作 `<-` 接受更多的值；给已经关闭的通道发送或者再次关闭都会导致运行时的 panic。在创建一个通道后使用 defer 语句是个不错的办法（类似这种情况）：
+
+```go
+ch := make(chan float64)
+defer close(ch)
+```
+
+第二个问题可以使用逗号，ok 操作符：用来检测通道是否被关闭。
+
+如何来检测可以收到没有被阻塞（或者通道没有被关闭）？
+
+```go
+v, ok := <- ch // ok is true if v recevied value
+```
+
+通常和 if 语句一起使用：
+
+```go
+if v, ok<- ch; ok{
+	process(v)
+}
+```
+
+或者在 for 循环中接收的时候，当关闭或者阻塞的时候使用 break：
+
+```
+v, ok := <- ch
+if !ok {
+	break
+}
+process(v)
+```
+
+在示例程序 14.2 中使用这些可以改进为版本 goroutine3.go，输出相同。
+
+实现非阻塞通道的读取，需要使用 select（参见第 14.4 节）。
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+   ch := make(chan string)
+   go sendData(ch)
+   getData(ch)
+}
+
+func sendData(ch chan string) {
+   ch <- "Washington"
+   ch <- "Tripoli"
+   ch <- "London"
+   ch <- "Beijing"
+   ch <- "Tokio"
+   close(ch)
+}
+
+func getData(ch chan string) {
+   for {
+      input, open := <-ch
+      if !open {
+         break
+      }
+      fmt.Printf("%s ", input)
+   }
+}
+```
+
+改变了以下代码：
+
+- 现在只有 sendData() 是协程， getData() 和 main() 在同一个线程中：
+
+  ```go
+  go sendData(ch)
+  getData(ch)
+  ```
+
+- 在 sendData() 函数的最后，关闭了通道：
+
+  ```go
+  func sendData(ch chan string) {
+     ch <- "Washington"
+     ch <- "Tripoli"
+     ch <- "London"
+     ch <- "Beijing"
+     ch <- "Tokio"
+     close(ch)
+  }
+  ```
+
+- 在 for 循环的 getData() 中，在每次接收通道的数据之前都使用 if !open 来检测：
+
+  ```go
+  for {
+     input, open := <-ch
+     if !open {
+        break
+     }
+     fmt.Printf("%s ", input)
+  }
+  ```
+
+使用 for-range 语句来读取通道是更好的办法，因为这会自动检测通道是否关闭：
+
+```go
+for input := range ch {
+	process(input)
+}
+```
+
+阻塞和生产者-消费者模式：
+
+在第 14.2.10 节的通道迭代器中，两个协程经常是一个阻塞另外一个。如果程序工作在多核心的机器上，大部分时间只用到了一个处理器。可以通过使用**带缓冲（缓冲空间大于 0）的通道**来改善。比如，缓冲大小为 100，迭代器在阻塞之前，至少可以从容器获得 100 个元素。如果消费者协程在独立的内核运行，就有可能让协程不会出现阻塞。
+
+由于容器中元素的数量通常是已知的，需要让通道有足够的容量放置所有的元素。这样，迭代器就不会阻塞（尽管消费者协程仍然可能阻塞）。然后，这样有效的加倍了迭代容器所需要的内存使用量，所以通道的容量需要限制一下最大值。记录运行时间和性能测试可以帮助你找到最小的缓存容量带来最好的性能。
 
 ### 11.4 使用 select 切换协程
 
+从不同的并发执行的协程中获取值可以通过关键字 `select` 来完成，它和 `switch` 控制语句非常相似（章节5.3）也被称作**通信开关**；它的行为像是“你准备好了吗”的**轮询机制**； select 监听进入通道的数据，也可以是用通道发送值的时候。
+
+```go
+select {
+case u := <- ch1:
+		...
+case v := ch2:
+		...
+default: // no value ready to be received
+		...
+}
+```
+
+`default` 语句是可选的；`fallthrough` 行为，和普通的 `switch` 相似，是不允许的。在任何一个 case 中执行 `break` 或者 `return` ，select 就结束了。
+
+`select` 做的就是：**选择处理列出的多个通信情况中的一个**。
+
+- 如果都阻塞了，会等待直到其中一个可以处理 
+- 如果多个可以处理，随机选择一个 
+- 如果没有通道操作可以处理并且写了 default 语句，它就会执行： default 永远是可运行的（这就是准备好了，可以执行）。
+
+在 `select` 中使用发送操作并且有 `default` 可以确保发送不被阻塞！如果没有 case，select 就会一直阻塞。
+
+`select` 语句实现了一种监听模式，通常用在（无限）循环中；在某种情况下，通过 `break` 语句使循环退出。
+
+在程序 `goroutine_select.go` 中有 2 个通道 `ch1` 和 `ch2` ，三个协程 `pump1()` 、 `pump2()` 和 `suck()` 。这是一个**典型的生产者消费者**模式。
+
+在无限循环中， `ch1` 和 `ch2` 通过 `pump1()` 和 `pump2()` 填充整数； `suck()` 也是在无限循环中轮询输入的，通过 `select` 语句获取 `ch1` 和 `ch2` 的整数并输出。选择哪一个 case 取决于哪一个通道收到了信息。程序在 main 执行 1 秒后结束。
+
+```go
+package main
+
+import (
+   "fmt"
+   "time"
+)
+
+func main() {
+   ch1 := make(chan int)
+   ch2 := make(chan int)
+
+   go pump1(ch1)
+   go pump2(ch2)
+   go suck(ch1, ch2)
+
+   time.Sleep(1e9)
+}
+
+func pump1(ch chan int) {
+   for i := 0; ; i++ {
+      ch <- i * 2
+   }
+}
+
+func pump2(ch chan int) {
+   for i := 0; ; i++ {
+      ch <- i + 5
+   }
+}
+
+func suck(ch1, ch2 chan int) {
+   for {
+      select {
+      case v := <-ch1:
+         fmt.Printf("Received on channel 1: %d\n", v)
+      case v := <-ch2:
+         fmt.Printf("Received on channel 2: %d\n", v)
+      }
+   }
+}
+```
+
 ### 11.5 通道、超时和计时器（Ticker）
+
+time 包中有一些有趣的功能可以和通道组合使用。
+
+其中就包含了 `time.Ticker` 结构体，这个对象以指定的时间间隔重复的向通道 C 发送时间值：
+
+```go
+type Ticker struct{
+	C <-chan Time // the channel on which the ticks are delivered.
+    // contains filtered or unexported fields
+    ...
+}
+```
+
+时间间隔的单位是 ns（纳秒，int64），在工厂函数 `time.NewTicker` 中以 `Duration` 类型的参数传入： `func Newticker(dur) *Ticker` 。
+
+在协程周期性的执行一些事情（打印状态日志，输出，计算等等）的时候非常有用。
+
+调用 `Stop()` 使计时器停止，在 `defer` 语句中使用。这些都很好的适应 `select` 语句:
+
+```go
+ticker := time.NewTicker(updateInterval)
+defer ticker.Stop()
+...
+select {
+	case u := <-ch1:
+			...
+	case v := <-ch2:
+			...
+	case <-ticker.C:
+			logState(status) // call some logging function logState
+	default:         // no value ready to be received
+			...
+}
+```
+
+`time.Tick()` 函数声明为 `Tick(d Duration) <-chan Time` ，当你想**返回一个通道而不必关闭**它的时候这个函数非常有用：它**以 d 为周期给返回的通道发送时间**，d是纳秒数。如果需要像下边的代码一样，限制处理频率（函数 client.Call() 是一个 RPC 调用，这里暂不赘述（参见第 15.9 节）：
+
+```go
+import "time"
+rate_per_sec := 10
+var dur Duration = 1e9 / rate_per_sec
+chRate := time.Tick(dur) // a tick every 1/10th of a second
+for req := range requests {
+   <- chRate // rate limit our Service.Method RPC calls
+   go client.Call("Service.Method", req, ...)
+}
+```
+
+这样只会**按照指定频率处理请求**： `chRate` 阻塞了更高的频率。每秒处理的频率可以根据机器负载（和/或）资源的情况而增加或减少。
 
 ### 11.6 协程和恢复（recover）
 
