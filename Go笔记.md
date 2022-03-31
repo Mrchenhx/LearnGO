@@ -7895,11 +7895,212 @@ for req := range requests {
 
 ### 11.6 协程和恢复（recover）
 
+一个用到 recover 的程序（参见第 13.3 节）停掉了服务器内部一个失败的协程而不影响其他协程的工作。
+
+```go
+func server(workChan <-chan *Work) {
+	for work := range workChan {
+		go safelyDo(work) // start the goroutine for that work
+	}
+}
+
+func safelyDo(work *Work) {
+	defer func() {
+		if err := recover(); err != nil {
+			log.Printf("Work failed with %s in %v", err, work)
+		}
+	}()
+	do(work)
+}
+```
+
+上边的代码，如果 do(work) 发生 panic，错误会被记录且协程会退出并释放，而其他协程不受影响。
+
+因为 `recover` 总是返回 `nil` ，除非直接在 `defer` 修饰的函数中调用， `defer` 修饰的代码可以调用那些自身可以使用 `panic` 和 `recover` 避免失败的库例程（库函数）。举例， `safelyDo()` 中 `defer` 修饰的函数可能在调用 `recover` 之前就调用了一个 `logging` 函数， `panicking` 状态不会影响 logging 代码的运行。因为加入了恢复模式，函数 do （以及它调用的任何东西）可以通过调用 panic 来摆脱不好的情况。但是恢复是在 panicking 的协程内部的：不能被另外一个协程恢复。
+
 ### 11.7 新旧模型对比：任务和worker
+
+假设我们需要处理很多任务；一个worker处理一项任务。任务可以被定义为一个结构体（具体的细节在这里并不重要）：
+
+```go
+type Task struct{
+	// some state
+}
+```
+
+旧模式：使用共享内存进行同步
+
+由各个任务组成的任务池共享内存；为了同步各个worker以及避免资源竞争，我们需要对任务池进行加锁保护：
+
+```go
+type Pool struct{
+	Mu sync.Mutex
+	Tasks []Task
+}
+```
+
+sync.Mutex(参见9.3是互斥锁：它用来在代码中保护临界区资源：**同一时间只有一个go协程**（goroutine）可以进入该临界区。如果出现了同一时间**多个go协程都进入了该临界区，则会产生竞争**：Pool结构就不能保证被正确更新。在传统的模式中（经典的面向对象的语言中应用得比较多，比如C++,JAVA,C#)，worker代码可能这样写：
+
+```go
+func Worker(pool *Pool) {
+	for {
+		pool.Mu.lock()
+		// begin critical section:
+		task := pool.Task[0]       // take the first task
+		pool.Tasks = pool.Task[1:] // update the pool of tasks
+		// end critical section
+		pool.Mu.Unlock()
+		process(task)
+	}
+}
+```
+
+这些worker有许多都可以并发执行；他们可以在go协程中启动。一个worker先将pool锁定，从pool获取第一项任 务，再解锁和处理任务。加锁保证了同一时间只有一个go协程可以进入到pool中：一项任务有且只能被赋予一个 worer。如果不加锁，则工作协程可能会在 `task:=pool.Task[0]` 发生切换，导致 `pool.Tasks=pool.Task[1:]` 结果异常：一些worker获取不到任务，而一些任务可能被多个worker得到。加锁实现同步的方式在工作协程比较少时可以工作的很好，但是当工作协程数量很大，任务量也很多时，处理效率将会因为频繁的加锁/解锁开销而降低。当工作协程数增加到一个阈值时，程序效率会急剧下降，这就成为了瓶颈。
+
+**新模式：使用通道**
+
+**使用通道进行同步**：使用一个通道**接受需要处理的任务**，一个通道**接受处理完成的任务**（及其结果）。worker在协程中启动，其数量N应该根据任务数量进行调整。
+
+主线程扮演着Master节点角色，可能写成如下形式：
+
+```go
+func main() {
+   pending, done := make(chan *Task), make(chan *Task)
+   go sendWork(pending)     // put tasks with work on the channel
+   for i := 0; i < N; i++ { // start N goroutines to do work
+      go Worker(pending, done)
+   }
+   consumeWork(done) // continue with the processed tasks
+}
+```
+
+worker的逻辑比较简单：从pending通道拿任务，处理后将其放到done通道中：
+
+```go
+func Worker(in, out chan *Task){
+    for{
+        t := <- in
+        process(t)
+        out <- t
+    }
+}
+```
+
+这里并不使用锁：**从通道得到新任务的过程没有任何竞争**。随着任务数量增加，**worker数量也应该相应增加**，同时性能并不会像第一种方式那样下降明显。
+
+在pending通道中存在一份任务的拷贝，第一个worker从pending通道中获得第一个任务并进行处理，这里并不存在竞争（对一个通道读数据和写数据的整个过程是原子性的：参见14.2.2)。某一个任务会在哪一个worker中被执行是不可知的，反过来也是。worker数量的增多也会增加通信的开销，这会对性能有轻微的影响。
+
+从这个简单的例子中可能很难看出第二种模式的优势，但含有复杂锁运用的程序不仅在编写上显得困难，也不容易编 写正确，使用第二种模式的话，就无需考虑这么复杂的东西了。
+
+因此，第二种模式对比第一种模式而言，不仅性能是一个主要优势，而且还有个更大的优势：代码显得更清晰、更优雅。一个更符合go语言习惯的worker写法：
+
+对于任何可以建模为`Master-Worker`范例的问题，一个类似于worker使用通道进行通信和交互、Master进行整体协调的方案都能完美解决。如果系统部署在多台机器上，各个机器上执行Worker协程，Master和Worker之间使用 netchan或者RPC进行通信（参见15章）。
+
+通道是一个较新的概念，本节我们着重强调了在go协程里通道的使用，但这并不意味着经典的锁方法就不能使用。go 语言让你可以根据实际问题进行选择：创建一个优雅、简单、可读性强、在大多数场景性能表现都能很好的方案。如 果你的问题适合使用锁，也不要忌讳使用它。go语言注重实用，什么方式最能解决你的问题就用什么方式，而不是强迫你使用一种编码风格。下面列出一个普遍的经验法则：
+
+1. 使用锁的情景：
+   - 访问共享数据结构中的缓存信息
+   - 保存应用程序上下文和状态信息数据
+2. 使用通道的情景：
+   - 与异步操作的结果进行交互
+   - 分发任务 
+   - 传递数据所有权
+
+当你发现你的锁使用规则变得很复杂时，可以反省使用通道会不会使问题变得简单些
 
 ### 11.8 惰性生成器的实现
 
+生成器是指当被调用时返回一个序列中下一个值的函数，例如：
+
+```go
+generateInteger() => 0
+generateInteger() => 1
+generateInteger() => 2
+```
+
+生成器每次返回的是**序列中下一个值**而非整个序列；这种特性也称之为**惰性求值**：只在你需要时进行求值，同时保留相关变量资源（内存和cpu）：这是一项在需要时对表达式进行求值的技术。
+
+例如，生成一个无限数量的偶数序列：要产生这样一个序列并且在一个一个的使用可能会很困难，而且内存会溢出！但是一个含有通道和go协程的函数能轻易实现这个需求。
+
+在14.12的例子中，我们实现了一个使用int型通道来实现的生成器。通道被命名为 yield 和 resume ，这些此经常在协程代码中使用。
+
+```go
+package main
+
+import (
+   "fmt"
+)
+
+var resume chan int
+
+func integers() chan int {
+   yield := make(chan int)
+   count := 0
+   go func() {
+      for {
+         yield <- count
+         count++
+      }
+   }()
+   return yield
+}
+
+func generateInteger() int {
+   return <-resume
+}
+
+func main() {
+   resume = integers()
+   fmt.Println(generateInteger()) //=> 0
+   fmt.Println(generateInteger()) //=> 1
+   fmt.Println(generateInteger()) //=> 2
+}
+```
+
+有一个细微的区别是从通道读取的值可能会是稍早前产生的，并不是在程序被调用时生成的。如果确实需要这样的行 为，就得实现一个请求响应机制。当生成器生成数据的过程是计算密集型且各个结果的顺序并不重要时，那么就可以将生成器放入到go协程实现并行化。但是得小心，使用大量的go协程的开销可能会超过带来的性能增益。
+
+这些原则可以概括为：通过巧妙地使用空接口、闭包和高阶函数，我们能实现一个通用的惰性生产器的工厂函数 BuildLazyEvaluator （这个应该放在一个工具包中实现）。
+
+工厂函数需要一个**函数**和一个**初始状态**作为输入参数，返回一个**无参**、**返回值是生成序列**的函数。传入的函数需要计算出下一个返回值以及下一个状态参数。**在工厂函数中，创建一个通道和无限循环的go协程。**返回值被放到了该通道中，返回函数稍后被调用时从该通道中取得该返回 值。每当取得一个值时，下一个值即被计算。
+
 ### 11.9 实现 Futures 模式
 
+所谓Futures就是指：有时候在你使用某一个值之前需要先对其进行计算。这种情况下，你就可以在另一个处理器上进行该值的计算，到使用时，该值就已经计算完毕了。
 
+Futures模式通过闭包和通道可以很容易实现，类似于生成器，不同地方在于Futures需要返回一个值。
 
+参考条目文献给出了一个很精彩的例子：假设我们有一个矩阵类型，我们需要计算两个矩阵A和B乘积的逆，首先我们通过函数 Inverse(M) 分别对其进行求逆运算，在将结果相乘。如下函数 `InverseProduct()` 实现了如上过程：
+
+```go
+func InverseProduct(a Matrix, b Matrix) {
+   a_inv := Inverse(a)
+   b_inv := Inverse(b)
+   return Product(a_inv, b_inv)
+}
+```
+
+在这个例子中，a和b的求逆矩阵需要先被计算。那么为什么在计算b的逆矩阵时，需要等待a的逆计算完成呢？显然不必要，这两个求逆运算其实可以并行执行的。换句话说，调用 Product 函数只需要等到 a_inv 和 b_inv 的计算完成。如下代码实现了并行计算方式：
+
+```go
+func InverseProduct(a Matrix, b Matrix) {
+   a_inv_future := InverseFuture(a) // start as a goroutine
+   b_inv_future := InverseFuture(b) // start as a goroutine
+   a_inv := <-a_inv_future
+   b_inv := <-b_inv_future
+   return Product(a_inv, b_inv)
+}
+```
+
+`InverseFuture` 函数起了一个 `goroutine` 协程，在其执行闭包运算，该闭包会将矩阵求逆结果放入到`future`通道 中：
+
+```go
+func InverseFuture(a Matrix) {
+   future := make(chan Matrix)
+   go func() {
+      future <- Inverse(a)
+   }()
+   return future
+}
+```
+
+当开发一个计算密集型库时，使用Futures模式设计API接口是很有意义的。在你的包使用Futures模式，且能保持友好的API接口。此外，Futures可以通过一个异步的API暴露出来。这样你可以以最小的成本将包中的并行计算移到用户代码中。
